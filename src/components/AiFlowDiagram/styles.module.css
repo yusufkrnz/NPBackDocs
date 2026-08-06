@@ -1,0 +1,175 @@
+.wrapper {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  background: var(--ifm-background-surface-color);
+}
+
+.track {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.5rem;
+  min-width: 640px;
+}
+
+.trackScroll {
+  overflow-x: auto;
+  padding-bottom: 0.75rem;
+}
+
+.participant {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.6rem 0.4rem;
+  border-radius: 8px;
+  border: 1.5px solid var(--ifm-color-emphasis-300);
+  background: var(--ifm-background-color);
+  transition: border-color 0.25s ease, background 0.25s ease, transform 0.25s ease;
+}
+
+.participantActive {
+  border-color: var(--ifm-color-primary);
+  background: var(--ifm-color-primary);
+  color: var(--ifm-background-color);
+  transform: translateY(-2px);
+}
+
+.rail {
+  position: relative;
+  height: 2px;
+  background: var(--ifm-color-emphasis-300);
+  /* pulseLabel sits at top:-1.7rem and can wrap to 2 lines on narrow screens —
+     this top margin must stay large enough that the label never overlaps the
+     participant row above it. */
+  margin: 3.25rem 0 2.5rem;
+}
+
+.pulse {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: var(--ifm-color-primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ifm-color-primary) 25%, transparent);
+  transform: translateY(-50%);
+}
+
+.pulseMoving {
+  transition: left 0.7s ease;
+}
+
+.pulseSelf {
+  animation: pulseSelf 0.9s ease;
+}
+
+@keyframes pulseSelf {
+  0% {
+    transform: translateY(-50%) scale(1);
+  }
+  40% {
+    transform: translateY(-50%) scale(1.6);
+  }
+  100% {
+    transform: translateY(-50%) scale(1);
+  }
+}
+
+.pulseLabel {
+  position: absolute;
+  top: -2.4rem;
+  transform: translateX(-50%);
+  max-width: 220px;
+  text-align: center;
+  font-size: 0.7rem;
+  line-height: 1.25;
+  color: var(--ifm-color-primary);
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 6px;
+  padding: 0.15rem 0.4rem;
+  font-weight: 600;
+}
+
+.caption {
+  min-height: 4.5rem;
+}
+
+.captionStep {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ifm-color-emphasis-600);
+  margin-bottom: 0.25rem;
+}
+
+.captionLabel {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.captionDescription {
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.95rem;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.button {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  background: var(--ifm-background-color);
+  color: var(--ifm-font-color-base);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.button:hover {
+  border-color: var(--ifm-color-primary);
+}
+
+.dots {
+  display: flex;
+  gap: 0.35rem;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ifm-color-emphasis-300);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.dotActive {
+  background: var(--ifm-color-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulseMoving {
+    transition: none;
+  }
+  .pulseSelf {
+    animation: none;
+  }
+  .participant {
+    transition: none;
+  }
+}

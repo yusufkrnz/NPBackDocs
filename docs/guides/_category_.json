@@ -1,0 +1,9 @@
+{
+  "label": "Rehberler",
+  "position": 1,
+  "link": {
+    "type": "generated-index",
+    "slug": "/guides",
+    "description": "Elle yazılan rehberler: kod nasıl yazılır, mimari neden böyle kuruldu, yeni bir servis/endpoint nasıl eklenir."
+  }
+}

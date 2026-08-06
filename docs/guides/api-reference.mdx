@@ -1,0 +1,24 @@
+---
+title: API Reference
+sidebar_position: 2
+description: Endpoint referansı neden elle yazılmıyor, canlı Swagger/Redoc nereden bulunur.
+---
+
+# API Reference
+
+Bu sitede elle yazılmış bir "endpoint listesi" sayfası **yok** — kasıtlı olarak. FastAPI, `routers/`'daki route tanımlarından ve `schemas/`'daki Pydantic modellerinden OpenAPI şemasını otomatik üretir. Elle yazılan bir referans, kod değiştikçe kaçınılmaz olarak eskir (drift); otomatik üretilen asla eskimez.
+
+## Canlı referans nerede
+
+| Ortam | Swagger UI | ReDoc |
+|---|---|---|
+| Local | `http://localhost:8000/docs` | `http://localhost:8000/redoc` |
+
+Servis ayakta olduğu sürece bu adresler her zaman o an deploy edilmiş koda birebir uyar.
+
+## Bu dokümanın işi ne zaman devreye giriyor
+
+Swagger sana **ne çağrılabilir**i (method, path, şema, hata kodları) gösterir ama **neden** ve **hangi sırayla** çağrıldığını göstermez. Onun için:
+
+- [Servisler](/services) — her servisin sorumluluğu, bağımlılıkları ve endpoint tablosu (Swagger'a link verir)
+- [Kullanım Senaryoları](/use-cases) — uçtan uca senaryolarda hangi endpoint'in hangi sırayla çağrıldığı, sequence diagram ile

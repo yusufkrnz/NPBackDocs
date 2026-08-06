@@ -1,0 +1,24 @@
+---
+title: Referanslar
+sidebar_position: 6
+description: Bu mimarinin dayandığı isimlendirilmiş pattern'ler ve neden kendi backend'imizde uyguladığımız.
+---
+
+# Referanslar
+
+Bu mimari sıfırdan uydurulmuş değil — endüstride adı olan bir pattern'e denk geliyor: **"guardrailed generative UI"**.
+
+## İlgili çalışmalar
+
+- **vercel-labs/json-render** — Vercel Labs'in açtığı bir generative UI framework'ü: "AI generates interfaces from natural language prompts, constrained to components you define." Bizim `components_catalog` + whitelist yaklaşımımızla aynı ilkeye dayanıyor: guardrailed (AI sadece kataloğundaki component'leri kullanabilir) ve predictable (JSON çıktısı her seferinde şemaya uyar).
+- **Anthropic / OpenAI native tool (function) calling** — LLM'in serbest metin yerine yapılandırılmış, şemaya bağlı bir JSON döndürmesini sağlayan mekanizma; bizim `tool_use` adımlarımızın (bkz. [Akış](/ai/flow)) dayandığı temel API özelliği.
+- **Server-driven UI** — Airbnb, Lyft gibi şirketlerin backend'in UI'ı JSON ile "tanımladığı", client'ın bunu bir component registry ile "yorumladığı" (asla ham markup göndermediği) genel mimari deseni.
+
+## Neden kendi backend'imizde uyguladık, hazır bir kütüphane kullanmadık
+
+- Katalog ve whitelist mantığı, mevcut [core/exceptions.py](/guides/coding-standards) hata yönetimi ve `Depends(get_db)` yetki kontrolü akışımızla birebir örtüşüyor — dışarıdan bir framework, bu iki katmanı kendi kurallarımızla entegre etmek yerine kendi soyutlamasını dayatırdı
+- Tool/component kataloğu, bizim domain'imize (CRM+ERP) özel — genel amaçlı bir kütüphanenin kendi şema formatını öğrenmek yerine, zaten kullandığımız Pydantic ile aynı desende tanımlıyoruz
+
+## Bu sayfaları güncel tutma
+
+Yeni bir tool veya component kataloğa eklendiğinde, [Katalog / Registry](/ai/registry) sayfasındaki örnek listeye de eklenmesi gerekir — kod ile doküman burada otomatik senkronize değildir, elle güncellenir.

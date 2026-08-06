@@ -1,0 +1,117 @@
+---
+title: Token Design
+sidebar_position: 2
+description: Access ve refresh token'ın üretimi, doğrulanması, rotasyonu.
+---
+
+# Token Design
+
+| | Access Token | Refresh Token |
+|---|---|---|
+| Format | JWT | Opak, rastgele string |
+| Ömür | `access_token_expire_minutes` (ör. 30 dk) | 30 gün |
+| Saklanır mı | Hayır (stateless) | `RefreshTokens`'ta, hash'lenmiş |
+| İptal edilebilir mi | Hayır | Evet (`is_revoked`) |
+
+## Access token üretimi
+
+```python
+# services/token_service.py
+import jwt
+from datetime import datetime, timedelta, timezone
+
+from core.settings import get_settings
+
+settings = get_settings()
+
+
+def create_access_token(user_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "iat": now,
+        "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+```
+
+`sub` dışında (email, rol gibi) hiçbir kullanıcı bilgisi token'a gömülmez — rol her istekte DB'den taze okunur.
+
+## Doğrulama
+
+```python
+# core/security.py
+from fastapi import Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+
+from core.settings import get_settings
+from core.exceptions import AuthenticationError
+
+settings = get_settings()
+bearer_scheme = HTTPBearer()
+
+
+def get_current_user_id(creds: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> str:
+    try:
+        payload = jwt.decode(creds.credentials, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except jwt.ExpiredSignatureError:
+        raise AuthenticationError("Access token süresi dolmuş")
+    except jwt.InvalidTokenError:
+        raise AuthenticationError("Geçersiz access token")
+    return payload["sub"]
+```
+
+## Refresh token üretimi
+
+```python
+# services/token_service.py
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
+
+REFRESH_TOKEN_TTL_DAYS = 30
+
+
+def create_refresh_token() -> tuple[str, str]:
+    """(client'a dönülecek ham token, DB'ye yazılacak hash)."""
+    raw_token = secrets.token_urlsafe(48)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    return raw_token, token_hash
+
+
+async def issue_refresh_token(db, user_id: str) -> str:
+    raw_token, token_hash = create_refresh_token()
+    await db.execute(
+        insert(RefreshTokens).values(
+            user_id=user_id,
+            token_hash=token_hash,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+            is_revoked=False,
+        )
+    )
+    return raw_token
+```
+
+Ham token DB'ye asla yazılmaz, sadece hash'i — şifrelerle aynı gerekçe. Doğrulama gelen token'ın hash'ini alıp karşılaştırır:
+
+```python
+async def verify_refresh_token(db, raw_token: str):
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    record = await db.scalar(select(RefreshTokens).where(RefreshTokens.token_hash == token_hash))
+    if record is None or record.is_revoked or record.expires_at < datetime.now(timezone.utc):
+        raise AuthenticationError("Geçersiz veya süresi dolmuş refresh token")
+    return record
+```
+
+## Rotasyon ve iptal
+
+- **Logout** → `is_revoked = true`
+- **`/auth/refresh`** → eski token `is_revoked = true`, yeni token üretilip döner (aynı token iki kez kullanılamaz; ikinci kullanım denemesi zaten iptal edilmiş bir token'a denk gelir — çalıntı token bu şekilde görünür hale gelir)
+- Access token iptal edilemez, bu yüzden ömrü kısa tutulur
+
+## Notlar
+
+- `jwt_secret` `.env`'den okunur (bkz. [coding-standards](/guides/coding-standards))
+- İmza simetrik (`HS256`) — token'ı tek bir servis (Auth Service) doğruladığı sürece yeterli
+- Refresh token `httpOnly` cookie'de tutulur, `localStorage`'da değil

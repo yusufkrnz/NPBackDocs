@@ -1,0 +1,106 @@
+---
+title: Kod yazma standartları
+sidebar_position: 1
+description: Katman sırası, hata yönetimi, config kullanımı ve yeni bir endpoint eklerken izlenecek adımlar.
+---
+
+# Kod yazma standartları
+
+`NewPortal-Backend` katmanlı bir mimariyle yazılıyor: her dosyanın tek bir sorumluluğu var, iş mantığı sadece bir katmanda yaşıyor. Yeni kod yazarken aşağıdaki sırayı ve kuralları takip edin.
+
+## Katman sırası
+
+```
+main.py                 → FastAPI app factory: middleware + exception handler + router kaydı
+core/
+  settings.py            → Pydantic BaseSettings, TÜM config .env'den okunur
+  middleware.py           → RequestID, AccessLog, SecurityHeaders
+  exceptions.py            → ServiceError hiyerarşisi + RFC7807 problem+json mapping
+routers/                  → HTTP katmanı — SADECE I/O, iş mantığı yok
+schemas/                   → Pydantic request/response modelleri, router başına 1 dosya
+services/                   → iş mantığı burada yaşar, router ve model arasındaki tek köprü
+models/
+  base.py                    → declarative Base, TimestampMixin
+  <domain>.py                → SQLAlchemy modelleri
+database.py                → async engine + get_db() dependency
+```
+
+**Akış her zaman aynı yönde işler:** `router → service → model`. Router asla doğrudan bir model veya DB session'ı üzerinde iş mantığı çalıştırmaz; service asla `Request`/`Response` nesnesi görmez.
+
+## Hata yönetimi
+
+Hata fırlatırken `raise HTTPException(...)` **yazmayın**. Bunun yerine `core/exceptions.py`'deki `ServiceError` alt sınıflarından birini kullanın:
+
+| Sınıf | HTTP durumu | Ne zaman |
+|---|---|---|
+| `ValidationError` | 422 | Girdi kurallara uymuyor |
+| `NotFoundError` | 404 | Kayıt yok |
+| `ConflictError` | 409 | Zaten var / durum çakışması |
+| `AuthenticationError` | 401 | Kimlik doğrulama başarısız |
+| `AuthorizationError` | 403 | Yetki yok |
+
+```python
+# services/user_service.py
+from core.exceptions import ConflictError
+
+if existing_user:
+    raise ConflictError("Bu e-posta zaten kayıtlı")
+```
+
+`main.py`'a kayıtlı global handler (`register_exception_handlers`) bunu otomatik olarak RFC 7807 `application/problem+json` gövdesine çevirir — router'da try/except yazmanıza gerek yok.
+
+## Config — her zaman `.env` üzerinden
+
+Hiçbir zaman port, secret, DB URL gibi değerleri kod içine sabit yazmayın. `core/settings.py`'deki `Settings` sınıfına alan olarak ekleyin, `get_settings()` ile okuyun:
+
+```python
+from core.settings import get_settings
+
+settings = get_settings()
+settings.database_url
+```
+
+Yeni bir ortam değişkeni eklerken hem `Settings`'e alan ekleyin hem `.env.example`'ı güncelleyin.
+
+## Yeni bir endpoint eklerken izlenecek adımlar
+
+1. **schemas/** — request/response Pydantic modelini yazın (`schemas/<resource>.py`)
+2. **services/** — iş mantığını yazın; DB'ye `Depends(get_db)` ile gelen `AsyncSession` üzerinden erişin, hataları `ServiceError` alt sınıflarıyla fırlatın
+3. **routers/** — endpoint'i tanımlayın; tek işi request'i schema'ya bağlamak, service'i çağırmak, response'u döndürmek
+4. **main.py** — yeni router'ı `app.include_router(...)` ile kaydedin
+5. Gerekiyorsa `models/` altına yeni tablo ekleyin ve `alembic revision --autogenerate` ile migration üretin
+
+Referans akış (aynı desen, farklı domain'lerde tekrarlanır — bkz. [Servisler](/services)):
+
+```python
+# routers/example.py
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database import get_db
+from schemas.example import ExampleCreate, ExampleResponse
+from services.example_service import create_example
+
+router = APIRouter(prefix="/examples", tags=["examples"])
+
+
+@router.post("", response_model=ExampleResponse)
+async def create_example_endpoint(
+    payload: ExampleCreate, db: AsyncSession = Depends(get_db)
+) -> ExampleResponse:
+    return await create_example(db, payload)
+```
+
+## Async ve DB session kuralı
+
+Tüm DB erişimi `async`/`await` ile yapılır. Session'ı asla global olarak açmayın — her zaman `Depends(get_db)` ile enjekte edin, `database.py`'deki `AsyncSessionLocal` dışında session oluşturmayın.
+
+## Adlandırma
+
+- Dosya adları `snake_case`, sınıf adları `PascalCase`, değişken/fonksiyon adları `snake_case`
+- Schema sınıfları fiil değil isim taşır (`UserCreate`, `UserResponse`) — servis fonksiyonları fiil taşır (`create_user`, `authenticate_user`)
+- Bir router dosyası bir kaynağı (resource) temsil eder — `register.py` ve `login.py` gibi ayrı endpoint'ler ayrı dosyalarda kalabilir, ama aynı kaynağa ait CRUD'lar tek dosyada toplanır
+
+## API referansı elle yazılmaz
+
+Endpoint'lerin request/response şeması, hata kodları ve auth gereksinimleri buraya elle taşınmaz — FastAPI bunu koddan otomatik üretir. Canlı referans için bkz. [API Reference](/guides/api-reference).

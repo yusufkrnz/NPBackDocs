@@ -1,0 +1,45 @@
+---
+title: Genel Bakış
+slug: /services/auth-service
+sidebar_position: 1
+description: Auth Service'in sorumluluğu, bağımlılıkları ve endpoint'leri.
+---
+
+# Auth Service
+
+## Sorumluluk
+
+Kullanıcı kaydı, login, access/refresh token yaşam döngüsü ve logout. **Yetkilendirme** (rol/izin kontrolü) bu servisin kapsamında değil — Auth Service sadece "bu kullanıcı kim" sorusuna cevap verir.
+
+## Bağımlılıklar
+
+- `Users`, `RefreshTokens` tabloları (bu servis sahibi — şema için bkz. database schema dokümanı)
+- `core/settings.py` — `jwt_secret`, `jwt_algorithm`, `access_token_expire_minutes`
+- `core/exceptions.py` — `ConflictError`, `AuthenticationError`
+
+Diğer tüm servisler dolaylı bağımlıdır: korumalı bir endpoint'e gelen her istekte access token bu servisin ürettiği imzayla doğrulanır.
+
+## Endpoint'ler
+
+| Method | Path | Açıklama | Detay |
+|---|---|---|---|
+| <span className="badge badge--success">POST</span> | `/auth/register` | Yeni kullanıcı oluşturur | [login-and-token-issuance](/use-cases/login-and-token-issuance) |
+| <span className="badge badge--success">POST</span> | `/auth/login` | E-posta + şifre ile giriş, access + refresh token döner | [login-and-token-issuance](/use-cases/login-and-token-issuance) |
+| <span className="badge badge--success">POST</span> | `/auth/refresh` | Geçerli bir refresh token ile yeni access token üretir | [Token Design](/services/auth-service/token-design) |
+| <span className="badge badge--success">POST</span> | `/auth/logout` | Refresh token'ı iptal eder | [Token Design](/services/auth-service/token-design) |
+| <span className="badge badge--success">POST</span> | `/auth/forgot-password` | Şifre sıfırlama e-postası tetikler | [Şifre Sıfırlama](/services/auth-service/password-reset) |
+| <span className="badge badge--success">POST</span> | `/auth/reset-password` | Sıfırlama token'ı ile yeni şifre belirler | [Şifre Sıfırlama](/services/auth-service/password-reset) |
+| <span className="badge badge--success">POST</span> | `/auth/verify-email` | E-posta doğrulama token'ını onaylar | [E-posta Doğrulama](/services/auth-service/email-verification) |
+
+Request/response şemalarının tam hâli için bkz. [API Reference](/guides/api-reference).
+
+## Hata durumları
+
+| Durum | Sınıf | HTTP |
+|---|---|---|
+| E-posta zaten kayıtlı | `ConflictError` | 409 |
+| Şifre yanlış | `AuthenticationError` | 401 |
+| Hesap `is_active = false` | `AuthenticationError` | 401 |
+| Refresh/reset/verify token süresi dolmuş veya iptal edilmiş | `AuthenticationError` | 401 |
+
+Bu sınıflar [coding-standards](/guides/coding-standards)'taki genel `ServiceError` hiyerarşisinden gelir.

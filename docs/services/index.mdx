@@ -1,0 +1,31 @@
+---
+title: Servisler
+sidebar_position: 1
+description: Servis sayfaları için şablon.
+---
+
+# Servisler
+
+Her servis için burada ayrı bir sayfa açılır (`docs/services/<servis-adı>.mdx`). İlk servis (ör. `auth-service`, `user-service`) eklendiğinde şu şablonu kullanın:
+
+## Şablon
+
+```markdown
+# <Servis Adı>
+
+## Sorumluluk
+Bu servis ne yapar, ne yapmaz.
+
+## Bağımlılıklar
+Hangi servisleri çağırıyor, kim onu çağırıyor.
+
+## Sahip olduğu veri
+Hangi tablo(lar) bu servisin sorumluluğunda.
+
+## Endpoint'ler
+| Method | Path | Açıklama | Kullanıldığı use-case |
+|---|---|---|---|
+| POST | /example | ... | [checkout-flow](/use-cases/checkout-flow) |
+```
+
+Endpoint'in tam request/response şeması burada tekrar yazılmaz — [API Reference](/guides/api-reference)'a link verilir, sadece "nerede kullanılıyor" bağlamı burada tutulur.

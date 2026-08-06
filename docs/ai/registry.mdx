@@ -1,0 +1,128 @@
+---
+title: Katalog / Registry
+sidebar_position: 3
+description: Tool ve component kataloglarının isimlendirme kuralları ve şema yapısı.
+---
+
+# Katalog / Registry
+
+LLM'e iki ayrı katalog verilir. İkisi de **sadece isim + açıklama + JSON şema** içerir — gerçek implementasyon (fonksiyon gövdesi, endpoint, DB sorgusu) LLM'e hiç gösterilmez, sadece backend'in kendi kod tabanında yaşar.
+
+## 1. Tools catalog — veri getiren fonksiyonlar
+
+Her giriş, LLM'in çağırabileceği bir backend fonksiyonunu isim + parametre şemasıyla tanımlar (native tool/function calling formatında):
+
+```python
+# ai/tools_catalog.py
+TOOLS_CATALOG = {
+    "get_overdue_customers": {
+        "description": "CRM (müşteri) ve ERP (tahsilat) verisini birleştirip ödemesi geciken müşterileri getirir",
+        "params_schema": {
+            "min_days_overdue": "integer (optional, default 30)",
+        },
+    },
+    # ...
+}
+```
+
+Gerçek fonksiyon, aynı isimle ayrı bir registry'de (services katmanında) yaşar — LLM bu fonksiyonun kodunu hiç görmez:
+
+```python
+# ai/tool_registry.py
+from services.receivables_service import list_overdue_customers
+
+TOOL_REGISTRY = {
+    "get_overdue_customers": list_overdue_customers,
+}
+```
+
+### Katalogdan native tool schema'ya
+
+`TOOLS_CATALOG` sadece bizim kendi referansımız değil — LLM sağlayıcısının **native tool calling** (function calling) API'sine giden gerçek şemayı buradan üretiriz. Bu "LLM'e JSON döndür" diye metinde rica etmekten tamamen farklı bir mekanizma: API'ye resmi bir şema veriyoruz, model serbest metin değil, doğrudan yapılandırılmış bir `tool_use` bloğu döndürüyor — regex/parse derdi yok.
+
+```python
+import anthropic
+
+client = anthropic.Anthropic()
+
+# Kullanıcının rolüne göre dinamik üretilen izinli tablo/kaynak listesi
+allowed_resources = get_allowed_resources_for_role(user_role)  # ör: ["get_overdue_customers"]
+
+response = client.messages.create(
+    model="claude-haiku-4-5",
+    max_tokens=300,
+    tools=[
+        {
+            "name": "get_overdue_customers",
+            "description": TOOLS_CATALOG["get_overdue_customers"]["description"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "min_days_overdue": {"type": "integer", "default": 30},
+                },
+                "required": [],
+            },
+        }
+    ],
+    tool_choice={"type": "tool", "name": "get_overdue_customers"},  # modeli bu tool'u kullanmaya ZORLAR
+    messages=[{"role": "user", "content": user_message}],
+)
+
+tool_call = next(b for b in response.content if b.type == "tool_use")
+tool_call.name    # "get_overdue_customers" — zaten whitelist'ten seçildi
+tool_call.input   # {"min_days_overdue": 30} — zaten parse edilmiş dict, string değil
+```
+
+Bunun neden bir güvenlik katmanı olduğu, sadece bir kolaylık olmadığı:
+
+- **`tool_choice` zorlaması** — modele "istersen çağır" değil "mutlaka bunu çağır" deniyor; serbest metin dönme ihtimali yok
+- **`input_schema`** — model bu şemanın dışına çıkan bir alan/tip üretemez (çoğu sağlayıcıda çıktı üretimi sırasında zorlanan bir kısıt, prompt'ta rica değil)
+- **`tool_call.input` zaten dict** — çıktıyı string olarak alıp `json.loads()` ile parse etmeye çalışıp hata riski almıyoruz, API bunu garanti ediyor
+
+Bu, [Güvenlik Modeli](/ai/security-model)'ndeki whitelist kontrolünün **öncesinde** çalışan birinci savunma katmanı — API seviyesinde modelin üretebileceği alan daraltılıyor, whitelist kontrolü ikinci katman (üretilse bile çalıştırılabilir mi).
+
+## 2. Components catalog — LLM'in seçebileceği UI parçaları
+
+Her giriş, önceden yazılmış, sabit bir frontend component'ini isim + prop şemasıyla tanımlar. **Kritik nokta:** LLM'e sorulan şema sadece component'in *şeklini* seçmesine izin verir (`columns` gibi) — gerçek veriyi taşıyan alanlar (`rows` gibi) LLM'in şemasında hiç yer almaz, backend tarafından LLM'in kararından sonra doldurulur:
+
+```python
+# ai/components_catalog.py
+COMPONENTS_CATALOG = {
+    "DataTable": {
+        "description": "Satır/sütun verisini tablo olarak gösterir",
+        # LLM'e sorulan şema — sadece şekil:
+        "llm_input_schema": {
+            "columns": "string[] (required)",
+        },
+        # LLM'e HİÇ sorulmayan, backend'in dolduracağı alan:
+        "backend_filled": {
+            "rows": "object[] — gerçek DB sonucundan backend tarafından eklenir",
+        },
+    },
+    "StatCard": {
+        "description": "Tek bir metrik değeri kart olarak gösterir",
+        "llm_input_schema": {
+            "label": "string (required)",
+        },
+        "backend_filled": {
+            "value": "string | number — gerçek değer backend tarafından eklenir",
+        },
+    },
+}
+```
+
+Frontend'de bu isimlerin karşılığı gerçek React component registry'sidir:
+
+```ts
+// frontend: componentRegistry.ts
+export const COMPONENT_REGISTRY = {
+  DataTable: DataTable,
+  StatCard: StatCard,
+};
+```
+
+## İsimlendirme kuralı
+
+- Tool isimleri fiil ile başlar: `get_...`, `list_...`, `create_...`
+- Component isimleri `PascalCase`, gerçek component adıyla birebir aynı olmalı
+- Bir katalog girdisi eklemeden önce **hem** `TOOLS_CATALOG`/`COMPONENTS_CATALOG`'a (LLM'in gördüğü şema) **hem** ilgili registry'ye (gerçek implementasyon) eklenmesi zorunlu — biri eksikse çağrı [Güvenlik Modeli](/ai/security-model)'ndeki whitelist kontrolünde reddedilir.

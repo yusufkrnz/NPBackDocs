@@ -1,0 +1,9 @@
+{
+  "label": "AI Katmanı",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "slug": "/ai",
+    "description": "LLM'in dinamik UI üretmesi için guardrailed generative UI mimarisi: katalog, akış ve güvenlik modeli."
+  }
+}

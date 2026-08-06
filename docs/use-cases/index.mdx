@@ -1,0 +1,40 @@
+---
+title: Kullanım Senaryoları
+sidebar_position: 1
+description: Kullanım senaryosu sayfaları için şablon.
+---
+
+# Kullanım Senaryoları
+
+Her uçtan uca senaryo için burada ayrı bir sayfa açılır (`docs/use-cases/<senaryo-adı>.mdx`). İlk senaryo (ör. `user-registration`) eklendiğinde şu şablonu kullanın:
+
+## Şablon
+
+````markdown
+# <Senaryo Adı>
+
+## Tanım
+Senaryo ne için var, aktörler kim (kullanıcı, sistem, 3. parti).
+
+## Akış
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API as NewPortal-Backend
+    participant DB
+
+    Client->>API: POST /example
+    API->>DB: INSERT ...
+    DB-->>API: OK
+    API-->>Client: 201 Created
+```
+
+## Adımlar
+1. ...
+
+## Hata / edge-case senaryoları
+- ...
+````
+
+Diyagram resim olarak eklenmez, Mermaid kod bloğu olarak yazılır — böylece PR review'da diff görünür ve versiyonlanır.

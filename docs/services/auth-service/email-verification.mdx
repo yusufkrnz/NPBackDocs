@@ -1,0 +1,35 @@
+---
+title: E-posta Doğrulama
+sidebar_position: 4
+description: Kayıt sonrası hesap aktivasyonu — doğrulama token'ı üretimi ve kontrolü.
+---
+
+# E-posta Doğrulama
+
+`/auth/register` sonrası hesap `is_active = false` ile oluşturulur; doğrulama tamamlanana kadar login engellenir.
+
+## Akış
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Auth as Auth Service
+    participant DB
+    participant Mail as E-posta servisi
+
+    Client->>Auth: POST /auth/register
+    Auth->>DB: Users (is_active=false) + doğrulama token'ı oluştur
+    Auth->>Mail: doğrulama linki gönder
+    Auth-->>Client: 201
+
+    Client->>Auth: POST /auth/verify-email {token}
+    Auth->>DB: token hash'ini doğrula (süre + is_used)
+    Auth->>DB: Users.is_active = true, token is_used = true
+    Auth-->>Client: 200
+```
+
+## Notlar
+
+- Doğrulama token'ı da [Token Design](/services/auth-service/token-design)'daki gibi random + hash üretilir, TTL 24 saat
+- `is_active = false` durumundaki hesap `/auth/login`'de `AuthenticationError` (401) alır — token süresi dolduysa yeni doğrulama e-postası isteme (`/auth/resend-verification`) ile çözülür
+- E-posta gönderimi senkron HTTP döngüsünde yapılmaz, async kuyruğa (BullMQ/Celery benzeri) bırakılır — kullanıcı e-posta servisinin yavaşlığını beklemez

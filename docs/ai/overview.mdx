@@ -1,0 +1,35 @@
+---
+title: Genel Bakış
+sidebar_position: 1
+description: LLM'in ekrana dinamik UI basmasını sağlayan mimarinin neden bu şekilde kurulduğu.
+---
+
+# AI Katmanı — Genel Bakış
+
+Üründe bir chat arayüzü var: kullanıcı doğal dille bir şey sorduğunda, LLM ekrana **dinamik bir UI** (tablo, grafik, kart vb.) bastırıyor. Bu sayfa, bunun nasıl güvenli ve öngörülebilir şekilde yapıldığını anlatıyor.
+
+## Çözülen tehdit
+
+İlk akla gelen yaklaşım — tüm endpoint'leri, DB şemasını LLM'in prompt'una vermek ve "uygun gördüğünü çağır" demek — ciddi bir güvenlik açığıdır:
+
+- **Prompt injection**: Kullanıcı mesajı içine gizlenmiş bir talimat, LLM'i yetkisi olmayan bir endpoint'i çağırmaya ikna edebilir
+- **Veri sızıntısı**: LLM'e "her şeyi" vermek, LLM'in normalde erişmemesi gereken alanları da görmesi anlamına gelir
+- **Doğrulanamaz çıktı**: LLM'in serbest metin (HTML) üretmesi, o metnin güvenle parse edilebileceği garantisini vermez (XSS, şema garantisi yok)
+
+## Çözüm: guardrailed generative UI
+
+Bu mimarinin endüstri karşılığı **"guardrailed generative UI"** — LLM arayüzü doğal dilden üretir ama sadece senin tanımladığın bir kataloğun sınırları içinde. Prensip:
+
+> LLM hiçbir zaman gerçek endpoint URL'ini, DB bağlantısını, secret'ı ya da gerçek veri değerini görmez — sadece "bu isimde bir şey var, şu şekli/tipi alır" bilgisini görür.
+
+Bu son madde kritik ve sıkça kaçırılıyor: LLM'e "veriyi getir" dedirtip dönen sonucu (gerçek müşteri adı, tutar, sipariş no gibi) tekrar LLM'e verip "şimdi bunu göster" dedirtmek — LLM'in konuşma geçmişine gerçek, potansiyel hassas veri sokmak demektir. Bunun yerine LLM'e sonucun sadece **şekli** (kaç satır, hangi kolonlar, hangi tip) verilir; LLM hangi component'i seçeceğine bu şekle bakarak karar verir. Gerçek satır verisi, LLM'in kararından **sonra**, backend tarafından client'a giden JSON'a eklenir — LLM bu veriyi hiç görmez, üretmez. Detay için bkz. [Neden LLM'e Ham Veri/Endpoint Vermiyoruz](/ai/why-no-raw-data).
+
+Üç bileşen:
+
+1. **Katalog / Registry** — hangi tool'lar ve UI component'leri LLM'e açık, hangi şemayla (bkz. [Katalog](/ai/registry))
+2. **Akış** — LLM'in kararını backend'in nasıl gerçek veriye ve gerçek UI'a çevirdiği (bkz. [Akış](/ai/flow))
+3. **Güvenlik modeli** — whitelist + şema doğrulama katmanı (bkz. [Güvenlik Modeli](/ai/security-model))
+
+## Neden HTML değil JSON
+
+LLM'e ham HTML/React kodu yazdırmak yerine, LLM'den yapılandırılmış JSON isteniyor: `{"component": "DataTable", "params": {...}}`. Bunun nedeni HTML'in "parse edilmesi gereken, şema garantisi olmayan serbest metin" olması — JSON ise native tool/function calling ile model sağlayıcı (Anthropic/OpenAI) tarafından zaten şemaya karşı doğrulanıyor. Detay için bkz. [Referanslar](/ai/references).

@@ -1,0 +1,9 @@
+{
+  "label": "Kullanım Senaryoları",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "slug": "/use-cases",
+    "description": "Uçtan uca senaryolar: sequence diagram + hangi servisin hangi endpoint'i çağırdığı."
+  }
+}

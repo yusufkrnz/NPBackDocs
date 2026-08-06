@@ -1,0 +1,72 @@
+---
+title: Akış
+sidebar_position: 4
+description: Kullanıcı mesajından ekrana dinamik UI basılmasına kadar olan adım adım akış.
+---
+
+import AiCatalogBoxes from '@site/src/components/AiCatalogBoxes';
+import AiFlowPipeline from '@site/src/components/AiFlowPipeline';
+
+# Akış
+
+Bu sayfa tek bir somut örnek üzerinden gidiyor: kullanıcı "**Ödemesi geciken müşterileri göster**" yazıyor. Bu örneği bilerek CRM (müşteri) ve ERP (tahsilat/cari) verisini birlikte gerektiren bir soru olarak seçtik — NewPortal'ın AI katmanının asıl değeri, tek başına bir modülde değil, modüller arası birleşik sorgularda ortaya çıkıyor. Aşağıdaki diyagram, mesajın uçtan uca hangi bileşenler arasında hangi sırayla dolaştığını **tek bakışta** gösteriyor.
+
+```mermaid
+sequenceDiagram
+    participant User as Kullanıcı
+    participant Chat as Chat UI
+    participant Backend
+    participant Registry as Registry
+    participant DB
+    participant LLM
+
+    User->>Chat: "Ödemesi geciken müşterileri göster"
+    Chat->>Backend: mesajı ilet
+    Backend->>LLM: mesaj + katalog (sadece isim + şema)
+    LLM-->>Backend: tool_use: get_overdue_customers(min_days_overdue)
+    Backend->>Registry: whitelist kontrolü
+    Backend->>DB: gerçek sorgu — CRM + ERP birleşik (tenant_id JWT'den enjekte edilir)
+    DB-->>Backend: gerçek veri
+    Backend->>LLM: tool_result: sadece ŞEKİL (3 satır, 3 kolon — değer yok)
+    LLM-->>Backend: render_ui(component="DataTable", columns=[...])
+    Backend->>Registry: component + kolon listesi doğrulama
+    Backend->>Backend: gerçek rows'u karara ekle (merge)
+    Backend-->>Chat: {component, props: {columns, rows}}
+    Chat->>Chat: registry'den "DataTable"ı bul, gerçek veriyle render et
+```
+
+## Adım adım
+
+1. **Kullanıcı mesajı** — Chat UI, mesajı backend'e iletir
+2. **LLM'e katalog gönderilir** — sadece isim + açıklama + şema; endpoint, DB bağlantısı, secret, gerçek veri hiçbir zaman gitmez
+3. **LLM tool seçer** — native tool calling ile yapılandırılmış bir `tool_use` döner (serbest metin değil)
+4. **Backend whitelist kontrolü yapar** — dönen isim `TOOL_REGISTRY`'de yoksa çağrı reddedilir
+5. **Gerçek fonksiyon çalışır** — yetki/`tenant_id` kontrolü burada, JWT'den, LLM'in kararından bağımsız
+6. **Sonucun ŞEKLİ LLM'e döner** — kaç satır, hangi kolonlar; gerçek değerler değil
+7. **LLM component seçer** — `render_ui(component, columns)`, satır verisi bu kararda hiç yok
+8. **İkinci whitelist kontrolü** — component ismi ve kolon listesi doğrulanır
+9. **Backend gerçek veriyi ekler** — adım 6'da zaten elindeki DB sonucunu LLM'in kararına birleştirir
+10. **Frontend registry'den render eder** — LLM'in yazdığı hiçbir markup DOM'a doğrudan basılmaz
+
+## Neden iki ayrı whitelist kontrolü var (adım 4 ve 8)
+
+Tool çağrısı ve UI seçimi ayrı kararlardır, ayrı ayrı doğrulanır — LLM ilk adımda whitelist'i atlatsa bile backend adım 4'te reddeder; ikinci adımda geçerli bir tool sonucunu geçersiz bir component ile eşleştirmeye çalışırsa adım 8 reddeder. Tek bir kontrol noktasına güvenmemek, saldırı yüzeyini daraltır.
+
+:::info LLM ekrana hiçbir kod göndermeden nasıl basıyor
+
+LLM'in gönderdiği tek şey adım 7'deki birkaç baytlık JSON: `{"component": "DataTable", "columns": [...]}` — sadece bir **isim** ve **şekil**, satır verisi yok. `DataTable`'ın gerçek React kodu LLM'e hiç sorulmadan, ürün derlenirken zaten frontend'e gömülmüş durumda (bkz. [Katalog / Registry](/ai/registry)). LLM çalışma anında sadece "önceden var olan seçeneklerden hangisi" diye işaretliyor — yeni bir component icat etmiyor, yazmıyor.
+
+:::
+
+## Bağlı akış: kaynaklardan sonuca
+
+İleri/geri gezilen bir carousel değil — Tool Catalog ve UI Catalog'un Backend'e, Backend'in LLM'e nasıl bağlı olduğu ve her turdaki **gerçek giden/gelen JSON**'lar, tek kaydırmada, yukarıdan aşağıya:
+
+<AiFlowPipeline />
+
+<details>
+<summary>Katalog girdilerinin tam şeması (referans)</summary>
+
+<AiCatalogBoxes />
+
+</details>

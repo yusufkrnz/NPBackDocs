@@ -1,0 +1,9 @@
+{
+  "label": "Servisler",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "slug": "/services",
+    "description": "Her servisin sorumluluğu, bağımlılıkları, sahip olduğu veri ve endpoint tablosu."
+  }
+}

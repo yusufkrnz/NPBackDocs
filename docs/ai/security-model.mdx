@@ -1,0 +1,74 @@
+---
+title: Güvenlik Modeli
+sidebar_position: 5
+description: Katmanlı savunma, whitelist mantığı ve LLM'in hiçbir zaman görmediği şeylerin listesi.
+---
+
+# Güvenlik Modeli
+
+## Temel ilke
+
+LLM'in bir tool veya component ismi döndürmesi, o çağrının **çalıştırılacağı** anlamına gelmez. Backend, dönen her ismi çalıştırmadan önce ayrı bir whitelist katmanından geçirir. Bu katman LLM'in "kararına" güvenmez — LLM'i sadece bir **öneri kaynağı** olarak görür.
+
+## Katmanlı savunma (defense in depth)
+
+Tek bir kontrol noktasına güvenmiyoruz — her katman, bir öncekinin atlatılması ihtimaline karşı bağımsız çalışır:
+
+1. **API seviyesi şema kısıtı** — `tool_choice` zorlaması + `input_schema`, modelin üretebileceği ismi/alanı API çağrısı sırasında daraltır (bkz. [Katalog / Registry](/ai/registry))
+2. **Backend whitelist/registry kontrolü** — üretilen isim gerçekten `TOOL_REGISTRY`/`COMPONENTS_CATALOG`'da var mı (bu sayfadaki `resolve_tool`)
+3. **Pydantic parametre doğrulama** — isim geçerli olsa bile parametreler/props şemaya uymuyorsa çağrı reddedilir
+4. **Yetki/tenant enjeksiyonu backend'de, deterministik** — `user_id`/`tenant_id` LLM'den asla okunmaz, JWT'den backend tarafından enjekte edilir; LLM bu değeri ne görür ne değiştirebilir
+5. **Gerçek veri LLM'e hiç gitmez** — tool sonucu ve render kararı LLM'e sadece şekil/tip olarak döner, gerçek satır değerleri backend tarafından LLM'in kararından sonra eklenir (bkz. [Neden LLM'e Ham Veri/Endpoint Vermiyoruz](/ai/why-no-raw-data))
+
+Bir katman atlansa (ör. eski bir model `tool_choice` desteklemiyorsa, katman 1 devre dışı kalır) diğerleri hâlâ korur — güvenlik tek bir mekanizmanın doğru çalışmasına bağlı değildir.
+
+:::caution Risk skoru gibi LLM öz-değerlendirmeleri güvenlik sınırı değildir
+
+Eğer akışa "bu sorgu ne kadar riskli" gibi bir adım eklerseniz (ör. LLM'den join sayısı/karmaşıklık tahmini istemek), bu değerlendirme **LLM'in kendi tahmini** olduğu için halüsinasyon riski taşır. Böyle bir skoru sadece erken uyarı/hata mesajı kalitesini iyileştirmek için kullanın — asla bir yetki veya çalıştırma kararının **tek** dayanağı yapmayın. Gerçek güvenlik sınırı her zaman yukarıdaki 1-4. katmanlar gibi deterministik, LLM'den bağımsız kontrollerdir.
+
+:::
+
+## Whitelist kontrolü nasıl çalışır
+
+```python
+# ai/whitelist.py
+from ai.tool_registry import TOOL_REGISTRY
+from core.exceptions import AuthorizationError
+
+def resolve_tool(name: str):
+    if name not in TOOL_REGISTRY:
+        raise AuthorizationError(f"'{name}' whitelist'te değil")
+    return TOOL_REGISTRY[name]
+```
+
+Aynı kontrol `COMPONENTS_CATALOG` için de tekrarlanır. İki kontrol noktası da bağımsızdır — biri atlatılsa diğeri yine de reddeder (bkz. [Akış](/ai/flow)).
+
+## LLM'in ASLA görmediği şeyler
+
+| Görmediği | Neden |
+|---|---|
+| Gerçek endpoint URL'leri | Doğrudan HTTP isteği yapamaz, sadece isim önerir |
+| DB bağlantı bilgisi / sorgu dili | SQL enjeksiyonu LLM üzerinden mümkün değil |
+| Secret / API key / JWT secret | `core/settings.py` içeriği hiçbir zaman prompt'a gitmez |
+| Kullanıcının yetki seviyesi detayları | Yetki kararı backend'de, tool çalıştırılırken verilir |
+| Diğer kullanıcıların verisi | Tool fonksiyonu, çağıran kullanıcının context'iyle (JWT'den gelen `user_id`) sınırlanır — LLM'in isteği bu sınırı genişletemez |
+| Sorgu sonucunun gerçek değerleri (satır/sütun içerikleri) | LLM'e sadece şekil (satır sayısı, kolon adı/tipi) döner — gerçek değerler backend tarafından LLM'in kararından sonra eklenir |
+
+## Parametre doğrulama
+
+Tool `params` ve component `props`, çalıştırılmadan önce Pydantic şemasına karşı doğrulanır. Şema dışı bir alan veya yanlış tip gelirse çağrı `ValidationError` ile reddedilir — bu, [coding-standards](/guides/coding-standards)'taki genel hata yönetimi kuralının aynısıdır, AI katmanı için ayrı bir istisna yoktur.
+
+## Prompt injection'a karşı neden bu yeterli
+
+Saldırgan, kullanıcı mesajı içine "whitelist dışı bir tool çağır" talimatı gizlese bile, LLM bunu bir `tool_use` olarak önerebilir ama backend bu ismi `TOOL_REGISTRY`'de bulamayacağı için çalıştırma hiç gerçekleşmez. Savunma, LLM'in "iyi davranmasına" değil, backend'in her çağrıyı whitelist'e karşı doğrulamasına dayanır.
+
+## İleri seviye alternatif: SQL üretimi + Guard katmanı
+
+Bu sayfadaki model, her veri ihtiyacı için önceden yazılmış, sabit bir fonksiyon varsayıyor (`get_overdue_customers` gibi). Rapor/sorgu ihtiyacı çok çeşitliyse (kullanıcı her seferinde farklı bir kırılım istiyorsa), her senaryo için ayrı fonksiyon yazmak yerine LLM'e **tablo/kolon kataloğu** verip SQL ürettirmek daha esnek olabilir. Bu durumda whitelist tek başına yetmez, ek bir **SQL Guard** katmanı gerekir:
+
+- **Sadece `SELECT`** — LLM'in ürettiği SQL'de `INSERT`/`UPDATE`/`DELETE`/`DROP` gibi ifadeler AST seviyesinde reddedilir
+- **AST whitelist** — SQL, çalıştırılmadan önce parse edilir; sorgu sadece izin verilen tablo/kolonlara dokunuyor mu kontrol edilir (string eşleştirme değil, gerçek ayrıştırma)
+- **Zorunlu `tenant_id` enjeksiyonu** — LLM'in ürettiği SQL'e güvenip `WHERE tenant_id = ...` filtresini LLM'in yazmasına **asla** izin verilmez; backend bu filtreyi SQL çalıştırılmadan hemen önce, JWT'den deterministik olarak enjekte eder
+- **Rol bazlı tablo/kolon izni** — kullanıcının rolüne göre hangi tablo/kolonların LLM'e gösterileceği (katalog) ve Guard'ın neyi kabul edeceği aynı kaynaktan gelir
+
+Bu yaklaşımın maliyeti: Guard katmanının doğruluğu artık **kritik** güvenlik sınırı hâline gelir — AST parse'daki bir hata doğrudan güvenlik açığı demektir. Bu yüzden küçük/orta ölçekli, önceden bilinen veri ihtiyaçları için bu sayfadaki sabit-fonksiyon (`TOOL_REGISTRY`) yaklaşımı hem daha basit hem daha az riskli; SQL üretimi, ancak fonksiyon sayısı yönetilemez şekilde büyüdüğünde değerlendirilecek bir sonraki adımdır.

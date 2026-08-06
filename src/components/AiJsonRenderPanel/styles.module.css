@@ -1,0 +1,83 @@
+/**
+ * Sabit koyu tema, site light/dark tercihinden bağımsız — vercel-labs/json-render'ın
+ * playground görünümünü (sol JSON, sağ canlı render) taklit eder.
+ */
+.panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #27272a;
+  background: #0a0a0a;
+  margin: 1.5rem 0;
+}
+
+.side {
+  padding: 1.1rem;
+  min-width: 0;
+}
+
+.sideLeft {
+  border-right: 1px solid #27272a;
+}
+
+@media (max-width: 700px) {
+  .panel {
+    grid-template-columns: 1fr;
+  }
+  .sideLeft {
+    border-right: none;
+    border-bottom: 1px solid #27272a;
+  }
+}
+
+.tab {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: #a1a1aa;
+  text-transform: lowercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.85rem;
+  font-family: var(--ifm-font-family-monospace);
+  border: 1px solid #27272a;
+  border-radius: 999px;
+  padding: 0.15rem 0.65rem;
+}
+
+.code {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.8rem;
+  line-height: 1.7;
+  color: #e4e4e7;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.key {
+  color: #e4e4e7;
+}
+
+.string {
+  color: #4ade80;
+}
+
+.punct {
+  color: #71717a;
+}
+
+.renderArea {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 160px;
+}
+
+.card {
+  background: #ffffff;
+  color: #18181b;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  width: 100%;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}

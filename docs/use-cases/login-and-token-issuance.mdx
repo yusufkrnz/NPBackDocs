@@ -1,0 +1,66 @@
+---
+title: Login ve token oluşturma
+sidebar_position: 2
+description: Kullanıcının e-posta/şifre ile giriş yapıp access + refresh token almasına kadar olan adım adım akış.
+---
+
+# Login ve token oluşturma
+
+## Tanım
+
+Kullanıcı, e-posta ve şifresiyle giriş yapar; başarılı olursa kısa ömürlü bir **access token** (korumalı endpoint'lere erişim için) ve uzun ömürlü bir **refresh token** (access token süresi dolunca yenilemek için) alır. Aktörler: Client (frontend), Auth Service, DB.
+
+## Akış
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Auth as Auth Service
+    participant DB
+
+    Client->>Auth: POST /auth/login {email, password}
+    Auth->>DB: email ile kullanıcıyı bul
+    DB-->>Auth: kullanıcı kaydı (password_hash dahil)
+    Auth->>Auth: password_hash doğrula (bcrypt/argon2)
+
+    alt şifre yanlış veya hesap pasif
+        Auth-->>Client: 401 AuthenticationError
+    else şifre doğru
+        Auth->>Auth: access_token üret (JWT, HS256, ör. 30 dk)
+        Auth->>DB: refresh_token oluştur ve kaydet (is_revoked=false)
+        DB-->>Auth: kayıt onayı
+        Auth-->>Client: 200 {access_token, refresh_token}
+    end
+```
+
+## Adımlar
+
+1. **Client** `/auth/login`'e `email` ve `password` gönderir
+2. **Auth Service**, `email` ile `Users` tablosunda kaydı arar
+3. Kayıt bulunamazsa veya `is_active = false` ise `AuthenticationError` (401) döner — "kullanıcı yok" ile "şifre yanlış" **aynı** hata mesajıyla döner (bkz. Güvenlik notu)
+4. Kayıt bulunduysa, gönderilen şifre `password_hash` ile karşılaştırılır (bcrypt/argon2 — düz metin şifre asla DB'de tutulmaz)
+5. Şifre yanlışsa yine `AuthenticationError` (401)
+6. Şifre doğruysa: kısa ömürlü bir **access token** (JWT, `core/settings.py`'deki `jwt_secret`/`jwt_algorithm` ile imzalanır, `access_token_expire_minutes` sonra geçersiz olur) üretilir
+7. Bir **refresh token** üretilir ve `RefreshTokens` tablosuna `user_id`, `expires_at`, `is_revoked=false` ile kaydedilir
+8. Her ikisi de `200 OK` ile client'a döner; client bunları güvenli şekilde saklar (ör. `httpOnly` cookie veya secure storage — düz `localStorage` önerilmez)
+
+### Token yenileme (`/auth/refresh`)
+
+Access token süresi dolunca client, refresh token'ı `/auth/refresh`'e gönderir. Geçerliyse hem yeni bir access token hem yeni bir refresh token döner, eski refresh token `is_revoked = true` yapılır (rotasyon) — üretim/doğrulama kodu ve rotasyonun gerekçesi için bkz. [Token Design](/services/auth-service/token-design).
+
+### Çıkış (`/auth/logout`)
+
+Client `/auth/logout`'a refresh token'ı gönderir, Auth Service ilgili kaydı `is_revoked = true` yapar. Access token DB'de tutulmadığı için "hemen iptal" edilemez — süresi dolana kadar teknik olarak geçerli kalır; bu yüzden `access_token_expire_minutes` kısa tutulur.
+
+## Hata / edge-case senaryoları
+
+| Senaryo | Sonuç |
+|---|---|
+| E-posta yok veya şifre yanlış | 401, **aynı** genel mesaj ("e-posta veya şifre hatalı") — hangisinin yanlış olduğu client'a söylenmez |
+| Hesap `is_active = false` | 401 — devre dışı bırakılmış hesap, var olduğu belli edilmeden reddedilir |
+| Refresh token süresi dolmuş | 401 — client yeniden `/auth/login` yapmak zorunda kalır |
+| Refresh token `is_revoked = true` | 401 — daha önce logout olmuş veya iptal edilmiş bir token tekrar kullanılamaz |
+
+## Güvenlik notu
+
+Adım 3 ve 5'te "kullanıcı yok" ile "şifre yanlış" durumlarının aynı hata mesajını dönmesi kasıtlıdır — aksi hâlde bir saldırgan, hangi e-postaların sistemde kayıtlı olduğunu deneme-yanılma ile (user enumeration) öğrenebilir.
