@@ -1,0 +1,93 @@
+---
+title: Kütüphaneler
+sidebar_position: 3
+description: Hangi kütüphaneyi neden seçtik — durum, çözüm, etki ve referans formatında.
+---
+
+# Kütüphaneler
+
+Her kütüphane seçimi aynı üç soruya cevap verir: **Durum** (bu olmadan hangi senaryoda ne ters gider), **Çözüm** (kütüphane bunu nasıl çözer), **Etki** (bizim için somut kazanç ne). Kendi kriptografi/kuyruk/log motorumuzu yazmıyoruz — hız kritik olduğu için, güvenliği ve olgunluğu topluluk tarafından uzun süredir denetlenmiş, yaygın kullanılan kütüphaneleri tercih ediyoruz.
+
+## Özet
+
+| İhtiyaç | Kütüphane | Durum |
+|---|---|---|
+| Migration | Alembic | Kullanımda |
+| Access token | PyJWT | Kullanımda |
+| Şifre hash'leme | bcrypt | Kullanımda |
+| Structured logging | structlog | Kullanımda |
+| Rate limiting | slowapi | Planlı |
+| Arka plan işleri (queue) | arq | MVP sonrası |
+| Validasyon | Pydantic | Kullanımda (FastAPI çekirdeği) |
+
+---
+
+## Alembic — migration
+
+**Durum:** Multi-tenant bir SaaS'ta şema değişikliğini elle SQL yazıp dev/stage/prod'a sırayla uygulamaya çalışmak — bir ortamda bir adım atlanırsa şemalar sessizce birbirinden sapar, haftalar sonra "prod'da neden bu kolon yok" diye ortaya çıkar.
+
+**Çözüm:** Her şema değişikliği sıralı, versiyonlanmış bir migration dosyasıdır. `alembic upgrade head` her ortamda aynı sırayla, tekrarlanabilir şekilde çalışır; SQLAlchemy modelinden `--autogenerate` ile taslak migration üretir.
+
+**Etki:** Tenant sayısı arttıkça şema senkronizasyonu manuel takip gerektirmez; CI/CD'de "migration'ları uygula" tek komut olur.
+
+**Referans:** https://alembic.sqlalchemy.org/
+
+## PyJWT — access token
+
+**Durum:** JWT encode/decode mantığını kendi yazmak — imza doğrulama sırasında algoritma karışıklığı (`alg: none` gibi bilinen JWT saldırı sınıfları) elle yazılan kodda kolayca gözden kaçar.
+
+**Çözüm:** PyJWT, bilinen JWT saldırı vektörlerine karşı test edilmiş; `algorithms=[...]` parametresiyle hangi imza algoritmasına izin verildiğini açıkça zorunlu kılar, `alg` alanının saldırgan tarafından değiştirilmesine izin vermez.
+
+**Etki:** [Token Design](/services/auth-service/token-design)'daki `core/security.py` birkaç satırda kalır — imza güvenliği sorumluluğu, topluluk tarafından sürekli denetlenen bir kütüphaneye devredilir.
+
+**Referans:** https://pyjwt.readthedocs.io/
+
+## bcrypt — şifre hash'leme
+
+**Durum:** Şifreyi düz metin ya da hızlı bir hash (MD5/SHA1) ile saklamak — DB sızıntısında saldırgan tüm kullanıcı şifrelerini anında (rainbow table ile) ele geçirir.
+
+**Çözüm:** bcrypt kasıtlı olarak yavaş ve salt'lıdır; her şifre için ayrı salt üretir, brute-force ve rainbow table saldırılarını hesaplama maliyeti yüzünden pratikte anlamsız hale getirir.
+
+**Etki:** `Users.password_hash` sızsa bile saldırganın gerçek şifreleri elde etmesi hesaplama açısından çok pahalıdır — anlık değil, yıllar sürecek bir maliyet.
+
+**Referans:** https://github.com/pyca/bcrypt
+
+## structlog — yapılandırılmış loglama
+
+**Durum:** Multi-tenant bir sistemde düz metin loglar içinde "hangi tenant, hangi request, hangi kullanıcı" diye grep yapmak — prod incident'ında dakikalar kaybettirir, bazen imkansızdır.
+
+**Çözüm:** structlog her log satırını yapılandırılmış JSON olarak üretir; `tenant_id`, `request_id`, `user_id` gibi alanlar metne gömülü değil, ayrı field olarak durur. Mevcut [RequestID middleware](/guides/coding-standards)'imizle doğrudan entegre olur.
+
+**Etki:** Log arama araçlarında ("bu tenant'ın son 1 saatteki tüm 500 hataları" gibi) sorgular saniyeler içinde yapılabilir — incident'larda çözüm süresi (MTTR) düşer.
+
+**Referans:** https://www.structlog.org/
+
+## slowapi — rate limiting
+
+**Durum:** `/auth/login` veya `/auth/forgot-password` gibi endpoint'lere sınırsız istek atılabilmesi — brute-force şifre denemesi veya "email-bombing" (başka birinin adresine sürekli sıfırlama linki gönderterek taciz) riski.
+
+**Çözüm:** slowapi, FastAPI'ye endpoint bazlı istek sınırlama ekler (ör. `5/minute`), Redis backend ile birden fazla sunucu instance'ı arasında paylaşılan sayaç tutar.
+
+**Etki:** Hassas auth endpoint'leri brute-force ve kötüye kullanıma karşı ek özel kod yazmadan korunur — [Güvenlik Modeli](/ai/security-model)'ndeki katmanlı savunma ilkesiyle aynı mantık, HTTP katmanına uygulanmış hâli.
+
+**Referans:** https://github.com/laurentS/slowapi
+
+## arq — arka plan işleri (MVP sonrası)
+
+**Durum:** E-posta gönderimi gibi yavaş bir işlemi senkron HTTP request içinde yapmak — kullanıcı "kayıt ol" derken e-posta servisi 3 saniye sürerse kullanıcı 3 saniye bekler; e-posta servisi o an çökükse kayıt isteğinin kendisi de başarısız olur.
+
+**Çözüm:** arq, Redis tabanlı, **asyncio-native** bir kuyruk — işi arka plana atıp hemen yanıt dönmeyi sağlar, worker ayrı bir süreçte çalışır. Celery de aynı işi yapar ama sync-ağırlıklı bir execution modeline dayanır; FastAPI'nin zaten async olan yapısıyla arq daha az sürtünmeyle örtüşür.
+
+**Etki:** E-posta/bildirim gibi yan işler ana request akışını yavaşlatmaz veya kilitlemez. **MVP'de yok** — şimdilik e-posta gönderimi doğrudan (senkron) yapılıyor; kullanıcı sayısı/gecikme sorun olmaya başladığında devreye girecek.
+
+**Referans:** https://arq-docs.helpmanual.io/
+
+## Pydantic — validasyon
+
+**Durum:** Request body'sinde beklenmeyen tip/alan gelmesi (ör. sayı beklenen bir alana metin gönderilmesi) — elle yazılan `if` kontrolleri hem yorucu hem eksik kalmaya müsait.
+
+**Çözüm:** FastAPI'nin çekirdeği olan Pydantic, tip tanımından şema + validasyon + OpenAPI dokümantasyonunu aynı anda üretir; geçersiz veri router'a hiç ulaşmadan `422` ile reddedilir.
+
+**Etki:** [coding-standards](/guides/coding-standards)'taki `schemas/` katmanında tanımlanan tek bir tip; hem validasyonu hem Swagger dokümantasyonunu hem IDE autocomplete'ini aynı anda sağlar.
+
+**Referans:** https://docs.pydantic.dev/

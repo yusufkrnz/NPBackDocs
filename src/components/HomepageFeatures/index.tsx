@@ -31,6 +31,11 @@ const FeatureList: FeatureItem[] = [
     to: '/ai',
     description: 'LLM\'in guardrailed generative UI ile ekrana dinamik UI bastırma mimarisi.',
   },
+  {
+    title: 'AWS',
+    to: '/aws',
+    description: 'Kullandığımız AWS servisleri — Bedrock ve ileride eklenecek diğerleri.',
+  },
 ];
 
 function Feature({title, description, to}: FeatureItem) {

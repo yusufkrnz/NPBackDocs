@@ -49,7 +49,7 @@ Bu akışı native tool calling ile (metinde rica etmek yerine, API seviyesinde 
 
 Yukarıdaki dört sözleşme (`catalogEntry`, `toolUseEvent`, `llmRenderDecision`, `renderEvent`) resmi JSON Schema olarak tanımlı: [`ai-catalog.schema.json`](/schemas/ai-catalog.schema.json). Hepsinde `additionalProperties: false` var — yani whitelist mantığı sadece anlatılmıyor, şemada da zorlanıyor: `llmRenderDecision` şemasında `rows`/`value` alanı **hiç tanımlı değil**, LLM bunu üretmeye çalışsa bile şema doğrulamasından geçemez.
 
-```json title="llmRenderDecision (özet)"
+```json title="llmRenderDecision (özet)" showLineNumbers
 {
   "additionalProperties": false,
   "required": ["component"],

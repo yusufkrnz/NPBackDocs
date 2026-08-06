@@ -12,7 +12,7 @@ LLM'e iki ayrı katalog verilir. İkisi de **sadece isim + açıklama + JSON şe
 
 Her giriş, LLM'in çağırabileceği bir backend fonksiyonunu isim + parametre şemasıyla tanımlar (native tool/function calling formatında):
 
-```python
+```python showLineNumbers
 # ai/tools_catalog.py
 TOOLS_CATALOG = {
     "get_overdue_customers": {
@@ -27,7 +27,7 @@ TOOLS_CATALOG = {
 
 Gerçek fonksiyon, aynı isimle ayrı bir registry'de (services katmanında) yaşar — LLM bu fonksiyonun kodunu hiç görmez:
 
-```python
+```python showLineNumbers
 # ai/tool_registry.py
 from services.receivables_service import list_overdue_customers
 
@@ -40,7 +40,7 @@ TOOL_REGISTRY = {
 
 `TOOLS_CATALOG` sadece bizim kendi referansımız değil — LLM sağlayıcısının **native tool calling** (function calling) API'sine giden gerçek şemayı buradan üretiriz. Bu "LLM'e JSON döndür" diye metinde rica etmekten tamamen farklı bir mekanizma: API'ye resmi bir şema veriyoruz, model serbest metin değil, doğrudan yapılandırılmış bir `tool_use` bloğu döndürüyor — regex/parse derdi yok.
 
-```python
+```python showLineNumbers
 import anthropic
 
 client = anthropic.Anthropic()
@@ -85,7 +85,7 @@ Bu, [Güvenlik Modeli](/ai/security-model)'ndeki whitelist kontrolünün **önce
 
 Her giriş, önceden yazılmış, sabit bir frontend component'ini isim + prop şemasıyla tanımlar. **Kritik nokta:** LLM'e sorulan şema sadece component'in *şeklini* seçmesine izin verir (`columns` gibi) — gerçek veriyi taşıyan alanlar (`rows` gibi) LLM'in şemasında hiç yer almaz, backend tarafından LLM'in kararından sonra doldurulur:
 
-```python
+```python showLineNumbers
 # ai/components_catalog.py
 COMPONENTS_CATALOG = {
     "DataTable": {
@@ -113,7 +113,7 @@ COMPONENTS_CATALOG = {
 
 Frontend'de bu isimlerin karşılığı gerçek React component registry'sidir:
 
-```ts
+```ts showLineNumbers
 // frontend: componentRegistry.ts
 export const COMPONENT_REGISTRY = {
   DataTable: DataTable,

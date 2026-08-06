@@ -104,6 +104,10 @@ const config: Config = {
               label: 'AI Katmanı',
               to: '/ai',
             },
+            {
+              label: 'AWS',
+              to: '/aws',
+            },
           ],
         },
       ],

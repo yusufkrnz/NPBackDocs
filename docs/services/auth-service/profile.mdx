@@ -1,0 +1,32 @@
+---
+title: Profil
+sidebar_position: 5
+description: Giriş yapmış kullanıcının kendi profil bilgilerini görmesi.
+---
+
+import ApiExample from '@site/src/components/ApiExample';
+
+# Profil
+
+<ApiExample
+  method="GET"
+  path="/users/me"
+  requestHeaders={{ Authorization: 'Bearer <access_token>' }}
+  response={{
+    id: 'usr_8f2a1c',
+    email: 'ayse@firma.com',
+    full_name: 'Ayşe Yılmaz',
+    is_active: true,
+    created_at: '2026-01-14T09:12:00Z',
+  }}
+>
+
+Access token'daki `sub` (`user_id`) üzerinden korumalı bir şekilde çağrılır — [Token Design](/services/auth-service/token-design)'daki `get_current_user_id` dependency'si ile.
+
+</ApiExample>
+
+## Notlar
+
+- Yanıttaki alanlar illüstratif bir örnek — gerçek DB şeması (`Users` tablosunun tam kolon listesi) bu sayfanın konusu değil, ayrı tutulur
+- `password_hash` gibi dahili alanlar hiçbir zaman response'a dahil edilmez — response şeması, DB modeliyle bire bir aynı değildir, ayrı bir "public" şema kullanılır
+- Bu endpoint sadece **okuma**dır; profil güncelleme ayrı bir endpoint'tir (`PATCH /users/me`), bu sayfanın kapsamında değil

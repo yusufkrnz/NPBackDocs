@@ -4,7 +4,25 @@ sidebar_position: 2
 description: Access ve refresh token'ın üretimi, doğrulanması, rotasyonu.
 ---
 
+import ApiExample from '@site/src/components/ApiExample';
+import CodeEditor from '@site/src/components/CodeEditor';
+
 # Token Design
+
+<ApiExample
+  method="POST"
+  path="/auth/refresh"
+  request={{ refresh_token: 'k3f9x...s0p2q' }}
+  response={{
+    access_token: 'eyJhbGciOiJIUzI1NiIs...',
+    refresh_token: 'p8m2z...q7w1e',
+    token_type: 'bearer',
+  }}
+>
+
+Access token süresi dolunca client bu endpoint'i çağırır. Dönen `refresh_token` **eskisinden farklıdır** — her çağrıda rotasyon uygulanır (bkz. [Rotasyon ve iptal](#rotasyon-ve-iptal)).
+
+</ApiExample>
 
 | | Access Token | Refresh Token |
 |---|---|---|
@@ -15,9 +33,9 @@ description: Access ve refresh token'ın üretimi, doğrulanması, rotasyonu.
 
 ## Access token üretimi
 
-```python
-# services/token_service.py
-import jwt
+<CodeEditor
+  filename="services/token_service.py"
+  code={`import jwt
 from datetime import datetime, timedelta, timezone
 
 from core.settings import get_settings
@@ -32,16 +50,16 @@ def create_access_token(user_id: str) -> str:
         "iat": now,
         "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
-```
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)`}
+/>
 
 `sub` dışında (email, rol gibi) hiçbir kullanıcı bilgisi token'a gömülmez — rol her istekte DB'den taze okunur.
 
 ## Doğrulama
 
-```python
-# core/security.py
-from fastapi import Depends
+<CodeEditor
+  filename="core/security.py"
+  code={`from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 
@@ -56,17 +74,17 @@ def get_current_user_id(creds: HTTPAuthorizationCredentials = Depends(bearer_sch
     try:
         payload = jwt.decode(creds.credentials, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except jwt.ExpiredSignatureError:
-        raise AuthenticationError("Access token süresi dolmuş")
+        raise AuthenticationError(code="auth.access_token_expired")
     except jwt.InvalidTokenError:
-        raise AuthenticationError("Geçersiz access token")
-    return payload["sub"]
-```
+        raise AuthenticationError(code="auth.access_token_invalid")
+    return payload["sub"]`}
+/>
 
 ## Refresh token üretimi
 
-```python
-# services/token_service.py
-import hashlib
+<CodeEditor
+  filename="services/token_service.py"
+  code={`import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -74,7 +92,7 @@ REFRESH_TOKEN_TTL_DAYS = 30
 
 
 def create_refresh_token() -> tuple[str, str]:
-    """(client'a dönülecek ham token, DB'ye yazılacak hash)."""
+    # (client'a dönülecek ham token, DB'ye yazılacak hash)
     raw_token = secrets.token_urlsafe(48)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     return raw_token, token_hash
@@ -90,19 +108,20 @@ async def issue_refresh_token(db, user_id: str) -> str:
             is_revoked=False,
         )
     )
-    return raw_token
-```
+    return raw_token`}
+/>
 
 Ham token DB'ye asla yazılmaz, sadece hash'i — şifrelerle aynı gerekçe. Doğrulama gelen token'ın hash'ini alıp karşılaştırır:
 
-```python
-async def verify_refresh_token(db, raw_token: str):
+<CodeEditor
+  filename="services/token_service.py"
+  code={`async def verify_refresh_token(db, raw_token: str):
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     record = await db.scalar(select(RefreshTokens).where(RefreshTokens.token_hash == token_hash))
     if record is None or record.is_revoked or record.expires_at < datetime.now(timezone.utc):
-        raise AuthenticationError("Geçersiz veya süresi dolmuş refresh token")
-    return record
-```
+        raise AuthenticationError(code="auth.refresh_token_invalid")
+    return record`}
+/>
 
 ## Rotasyon ve iptal
 
@@ -115,3 +134,4 @@ async def verify_refresh_token(db, raw_token: str):
 - `jwt_secret` `.env`'den okunur (bkz. [coding-standards](/guides/coding-standards))
 - İmza simetrik (`HS256`) — token'ı tek bir servis (Auth Service) doğruladığı sürece yeterli
 - Refresh token `httpOnly` cookie'de tutulur, `localStorage`'da değil
+- Hata mesajları burada da `code` üzerinden döner, hardcoded metin değil (bkz. [i18n notu](/guides/coding-standards#i18n--backend-asla-nihai-dilde-metin-döndürmez))

@@ -39,21 +39,51 @@ Hata fırlatırken `raise HTTPException(...)` **yazmayın**. Bunun yerine `core/
 | `AuthenticationError` | 401 | Kimlik doğrulama başarısız |
 | `AuthorizationError` | 403 | Yetki yok |
 
-```python
+```python showLineNumbers
 # services/user_service.py
 from core.exceptions import ConflictError
 
 if existing_user:
-    raise ConflictError("Bu e-posta zaten kayıtlı")
+    raise ConflictError(code="auth.email_already_registered")
 ```
 
 `main.py`'a kayıtlı global handler (`register_exception_handlers`) bunu otomatik olarak RFC 7807 `application/problem+json` gövdesine çevirir — router'da try/except yazmanıza gerek yok.
+
+### i18n — backend asla nihai dilde metin döndürmez
+
+`ConflictError("Bu e-posta zaten kayıtlı")` gibi **hardcoded, tek dilde bir string** fırlatmayın. Frontend'de i18n kurulu olduğu için backend'in görevi sadece kararlı bir **`code`** (ve gerekiyorsa interpolasyon için `params`) döndürmek — hangi dilde, hangi cümleyle gösterileceğine frontend'in i18n katmanı karar verir:
+
+```python showLineNumbers
+# core/exceptions.py
+class ServiceError(Exception):
+    status_code = 500
+    default_code = "error.internal"
+
+    def __init__(self, code: str | None = None, params: dict | None = None):
+        self.code = code or self.default_code
+        self.params = params or {}
+        super().__init__(self.code)
+```
+
+RFC 7807 gövdesi buna göre `detail` yerine `code`/`params` taşır:
+
+```json showLineNumbers
+{
+  "type": "https://newportal.dev/errors/auth.email_already_registered",
+  "code": "auth.email_already_registered",
+  "params": {},
+  "status": 409,
+  "instance": "/auth/register"
+}
+```
+
+Bu kural **sadece hatalar için değil** — başarı mesajları için de geçerli. Bir endpoint kullanıcıya gösterilecek bir metin döndürüyorsa (ör. "e-postanız gönderildi"), o da `message` değil `message_code` olarak döner; örnek için bkz. [Şifre Sıfırlama](/services/auth-service/password-reset). Backend'in tek sorumluluğu doğru `code`'u seçmek — metni frontend'in i18n sözlüğü üretir.
 
 ## Config — her zaman `.env` üzerinden
 
 Hiçbir zaman port, secret, DB URL gibi değerleri kod içine sabit yazmayın. `core/settings.py`'deki `Settings` sınıfına alan olarak ekleyin, `get_settings()` ile okuyun:
 
-```python
+```python showLineNumbers
 from core.settings import get_settings
 
 settings = get_settings()
@@ -72,7 +102,7 @@ Yeni bir ortam değişkeni eklerken hem `Settings`'e alan ekleyin hem `.env.exam
 
 Referans akış (aynı desen, farklı domain'lerde tekrarlanır — bkz. [Servisler](/services)):
 
-```python
+```python showLineNumbers
 # routers/example.py
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession

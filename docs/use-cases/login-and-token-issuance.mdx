@@ -4,11 +4,26 @@ sidebar_position: 2
 description: Kullanıcının e-posta/şifre ile giriş yapıp access + refresh token almasına kadar olan adım adım akış.
 ---
 
+import ApiExample from '@site/src/components/ApiExample';
+
 # Login ve token oluşturma
+
+<ApiExample
+  method="POST"
+  path="/auth/login"
+  request={{ email: 'ayse@firma.com', password: '••••••••' }}
+  response={{
+    access_token: 'eyJhbGciOiJIUzI1NiIs...',
+    refresh_token: 'k3f9x...s0p2q',
+    token_type: 'bearer',
+  }}
+>
 
 ## Tanım
 
 Kullanıcı, e-posta ve şifresiyle giriş yapar; başarılı olursa kısa ömürlü bir **access token** (korumalı endpoint'lere erişim için) ve uzun ömürlü bir **refresh token** (access token süresi dolunca yenilemek için) alır. Aktörler: Client (frontend), Auth Service, DB.
+
+</ApiExample>
 
 ## Akış
 

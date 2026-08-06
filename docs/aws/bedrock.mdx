@@ -1,0 +1,60 @@
+---
+title: Bedrock
+sidebar_position: 1
+description: LLM sağlayıcısı olarak AWS Bedrock — neden, kimlik doğrulama, model çağrısı, fallback.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Bedrock
+
+LLM çağrılarımız doğrudan bir sağlayıcının kendi API'sine değil, **AWS Bedrock** üzerinden yapılır. Bu sayfa "neden Bedrock" ve "backend'de nasıl çağrılır" sorularına cevap verir — model/fiyat/routing verisi burada değil, [databaseschema](https://yusufkrnz.github.io/databaseschema/postgres/platform/models) sitesinde (`models`, `model_pricing`, `llm_model_routing` tabloları) tutulur.
+
+## Neden Bedrock, doğrudan sağlayıcı API'si değil
+
+- **Kimlik doğrulama secret değil, IAM** — Bedrock'a erişim statik bir API key ile değil, AWS IAM rolü + SigV4 imzalama ile yapılır. Bu, [Güvenlik Modeli](/ai/security-model)'ndeki "LLM'e hiçbir secret gitmez" ilkesini bir adım öteye taşır: backend kodunda çağrıyı imzalayan bir API key string'i **de** yoktur, yetki AWS'nin kendi kimlik altyapısından (rol, execution environment) gelir.
+- **Tek fatura, çoklu model** — Anthropic, Meta, Amazon gibi farklı sağlayıcıların modelleri tek bir AWS faturasında, tek bir API şeklinde (Converse API) erişilebilir; sağlayıcı değiştirmek yeni bir SDK/entegrasyon gerektirmez.
+- **Bölge kontrolü** — veri hangi AWS bölgesinde işlenir, kurumsal/uyumluluk gereksinimlerine göre seçilebilir.
+
+## Model çağrısı — Converse API
+
+Bedrock'un Converse API'si, hangi sağlayıcının modelini çağırdığınızdan bağımsız **tek bir mesaj formatı** kullanır — tool use (bizim `tool_use`/`render_ui` akışımızın dayandığı mekanizma) burada da native olarak destekleniyor:
+
+<CodeEditor
+  filename="services/bedrock_client.py"
+  code={`import boto3
+
+bedrock = boto3.client("bedrock-runtime", region_name="eu-central-1")
+
+
+def invoke_model(model_id: str, messages: list, tools: list):
+    response = bedrock.converse(
+        modelId=model_id,  # models.bedrock_model_id — ham string burada, uygulama kodunda değil
+        messages=messages,
+        toolConfig={"tools": tools},
+    )
+    return response["output"]["message"]`}
+/>
+
+`model_id` uygulama kodunda **sabit yazılmaz** — [llm_model_routing](https://yusufkrnz.github.io/databaseschema/postgres/platform/llm-model-routing)'den, çağrının amacına (`intent_detection` / `ui_generation` / `tool_call`) göre okunur. Bu sayede daha ucuz/hızlı bir modele geçiş, kod değişikliği ve deploy gerektirmez — tek satır `UPDATE`.
+
+## Fallback
+
+Birincil model hata verirse (timeout, rate limit, 5xx) backend `llm_model_routing.fallback_model_id`'ye otomatik düşer:
+
+<CodeEditor
+  filename="services/bedrock_client.py"
+  code={`async def invoke_with_fallback(routing, messages: list, tools: list):
+    try:
+        return invoke_model(routing.model_id, messages, tools), False
+    except BedrockServiceError:
+        if not routing.fallback_model_id:
+            raise
+        return invoke_model(routing.fallback_model_id, messages, tools), True`}
+/>
+
+İkinci dönen değer (`was_fallback`) [llm_call_log](https://yusufkrnz.github.io/databaseschema/mongodb/llm-call-log)'a olduğu gibi yazılır — hangi çağrının fallback model ile yapıldığı, dolayısıyla neden o ay maliyetin biraz farklı olduğu geriye dönük görülebilir.
+
+## Maliyet ve token takibi
+
+Her çağrının `input_tokens`, `output_tokens`, `cost_usd` değerleri backend tarafından [llm_call_log](https://yusufkrnz.github.io/databaseschema/mongodb/llm-call-log)'a yazılır — fiyat, çağrı anındaki [model_pricing](https://yusufkrnz.github.io/databaseschema/postgres/platform/model-pricing) değeriyle hesaplanıp donmuş (frozen) olarak saklanır, fiyat sonradan değişse bile geçmiş kayıt bozulmaz. Bu sayfa sadece backend'in çağrıyı nasıl yaptığını anlatır; token bütçesini (context'e ne kadar mesaj koyacağımızı) nasıl sınırladığımız için bkz. [Konuşma Bağlamı ve Token Bütçesi](/ai/conversation-context).

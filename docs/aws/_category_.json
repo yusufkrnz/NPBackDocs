@@ -1,0 +1,9 @@
+{
+  "label": "AWS",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "slug": "/aws",
+    "description": "Kullandığımız AWS servisleri — Bedrock (LLM), ve ileride eklenecek diğerleri (S3, SQS, deploy/altyapı)."
+  }
+}
