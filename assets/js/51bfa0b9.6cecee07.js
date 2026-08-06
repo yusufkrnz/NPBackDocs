@@ -1,0 +1,63 @@
+"use strict";(self.webpackChunknpbackdocs=self.webpackChunknpbackdocs||[]).push([["1014"],{552(e,s,r){r.r(s),r.d(s,{metadata:()=>t,default:()=>u,frontMatter:()=>o,contentTitle:()=>l,toc:()=>h,assets:()=>c});var t=JSON.parse('{"id":"services/auth-service/token-design","title":"Token Design","description":"Access ve refresh token\'\u0131n \xfcretimi, do\u011Frulanmas\u0131, rotasyonu.","source":"@site/docs/services/auth-service/token-design.mdx","sourceDirName":"services/auth-service","slug":"/services/auth-service/token-design","permalink":"/NPBackDocs/services/auth-service/token-design","draft":false,"unlisted":false,"editUrl":"https://github.com/yusufkrnz/NPBackDocs/tree/main/docs/services/auth-service/token-design.mdx","tags":[],"version":"current","sidebarPosition":2,"frontMatter":{"title":"Token Design","sidebar_position":2,"description":"Access ve refresh token\'\u0131n \xfcretimi, do\u011Frulanmas\u0131, rotasyonu."},"sidebar":"docsSidebar","previous":{"title":"Genel Bak\u0131\u015F","permalink":"/NPBackDocs/services/auth-service"},"next":{"title":"\u015Eifre S\u0131f\u0131rlama","permalink":"/NPBackDocs/services/auth-service/password-reset"}}'),n=r(4848),i=r(8453),a=r(2783),d=r(3937);let o={title:"Token Design",sidebar_position:2,description:"Access ve refresh token'\u0131n \xfcretimi, do\u011Frulanmas\u0131, rotasyonu."},l="Token Design",c={},h=[{value:"Access token \xfcretimi",id:"access-token-\xfcretimi",level:2},{value:"Do\u011Frulama",id:"do\u011Frulama",level:2},{value:"Refresh token \xfcretimi",id:"refresh-token-\xfcretimi",level:2},{value:"Rotasyon ve iptal",id:"rotasyon-ve-iptal",level:2},{value:"Notlar",id:"notlar",level:2}];function m(e){let s={a:"a",code:"code",h1:"h1",h2:"h2",header:"header",li:"li",p:"p",strong:"strong",table:"table",tbody:"tbody",td:"td",th:"th",thead:"thead",tr:"tr",ul:"ul",...(0,i.R)(),...e.components};return(0,n.jsxs)(n.Fragment,{children:[(0,n.jsx)(s.header,{children:(0,n.jsx)(s.h1,{id:"token-design",children:"Token Design"})}),"\n",(0,n.jsx)(a.A,{method:"POST",path:"/auth/refresh",request:{refresh_token:"k3f9x...s0p2q"},response:{access_token:"eyJhbGciOiJIUzI1NiIs...",refresh_token:"p8m2z...q7w1e",token_type:"bearer"},children:(0,n.jsxs)(s.p,{children:["Access token s\xfcresi dolunca client bu endpoint'i \xe7a\u011F\u0131r\u0131r. D\xf6nen ",(0,n.jsx)(s.code,{children:"refresh_token"})," ",(0,n.jsx)(s.strong,{children:"eskisinden farkl\u0131d\u0131r"})," \u2014 her \xe7a\u011Fr\u0131da rotasyon uygulan\u0131r (bkz. ",(0,n.jsx)(s.a,{href:"#rotasyon-ve-iptal",children:"Rotasyon ve iptal"}),")."]})}),"\n",(0,n.jsxs)(s.table,{children:[(0,n.jsx)(s.thead,{children:(0,n.jsxs)(s.tr,{children:[(0,n.jsx)(s.th,{}),(0,n.jsx)(s.th,{children:"Access Token"}),(0,n.jsx)(s.th,{children:"Refresh Token"})]})}),(0,n.jsxs)(s.tbody,{children:[(0,n.jsxs)(s.tr,{children:[(0,n.jsx)(s.td,{children:"Format"}),(0,n.jsx)(s.td,{children:"JWT"}),(0,n.jsx)(s.td,{children:"Opak, rastgele string"})]}),(0,n.jsxs)(s.tr,{children:[(0,n.jsx)(s.td,{children:"\xd6m\xfcr"}),(0,n.jsxs)(s.td,{children:[(0,n.jsx)(s.code,{children:"access_token_expire_minutes"})," (\xf6r. 30 dk)"]}),(0,n.jsx)(s.td,{children:"30 g\xfcn"})]}),(0,n.jsxs)(s.tr,{children:[(0,n.jsx)(s.td,{children:"Saklan\u0131r m\u0131"}),(0,n.jsx)(s.td,{children:"Hay\u0131r (stateless)"}),(0,n.jsxs)(s.td,{children:[(0,n.jsx)(s.code,{children:"RefreshTokens"}),"'ta, hash'lenmi\u015F"]})]}),(0,n.jsxs)(s.tr,{children:[(0,n.jsx)(s.td,{children:"\u0130ptal edilebilir mi"}),(0,n.jsx)(s.td,{children:"Hay\u0131r"}),(0,n.jsxs)(s.td,{children:["Evet (",(0,n.jsx)(s.code,{children:"is_revoked"}),")"]})]})]})]}),"\n",(0,n.jsx)(s.h2,{id:"access-token-\xfcretimi",children:"Access token \xfcretimi"}),"\n",(0,n.jsx)(d.A,{filename:"services/token_service.py",code:`import jwt
+from datetime import datetime, timedelta, timezone
+
+from core.settings import get_settings
+
+settings = get_settings()
+
+
+def create_access_token(user_id: str) -> str:
+  now = datetime.now(timezone.utc)
+  payload = {
+      "sub": user_id,
+      "iat": now,
+      "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
+  }
+  return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)`}),"\n",(0,n.jsxs)(s.p,{children:[(0,n.jsx)(s.code,{children:"sub"})," d\u0131\u015F\u0131nda (email, rol gibi) hi\xe7bir kullan\u0131c\u0131 bilgisi token'a g\xf6m\xfclmez \u2014 rol her istekte DB'den taze okunur."]}),"\n",(0,n.jsx)(s.h2,{id:"do\u011Frulama",children:"Do\u011Frulama"}),"\n",(0,n.jsx)(d.A,{filename:"core/security.py",code:`from fastapi import Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+
+from core.settings import get_settings
+from core.exceptions import AuthenticationError
+
+settings = get_settings()
+bearer_scheme = HTTPBearer()
+
+
+def get_current_user_id(creds: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> str:
+  try:
+      payload = jwt.decode(creds.credentials, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+  except jwt.ExpiredSignatureError:
+      raise AuthenticationError(code="auth.access_token_expired")
+  except jwt.InvalidTokenError:
+      raise AuthenticationError(code="auth.access_token_invalid")
+  return payload["sub"]`}),"\n",(0,n.jsx)(s.h2,{id:"refresh-token-\xfcretimi",children:"Refresh token \xfcretimi"}),"\n",(0,n.jsx)(d.A,{filename:"services/token_service.py",code:`import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
+
+REFRESH_TOKEN_TTL_DAYS = 30
+
+
+def create_refresh_token() -> tuple[str, str]:
+  # (client'a d\xf6n\xfclecek ham token, DB'ye yaz\u{131}lacak hash)
+  raw_token = secrets.token_urlsafe(48)
+  token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+  return raw_token, token_hash
+
+
+async def issue_refresh_token(db, user_id: str) -> str:
+  raw_token, token_hash = create_refresh_token()
+  await db.execute(
+      insert(RefreshTokens).values(
+          user_id=user_id,
+          token_hash=token_hash,
+          expires_at=datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+          is_revoked=False,
+      )
+  )
+  return raw_token`}),"\n",(0,n.jsx)(s.p,{children:"Ham token DB'ye asla yaz\u0131lmaz, sadece hash'i \u2014 \u015Fifrelerle ayn\u0131 gerek\xe7e. Do\u011Frulama gelen token'\u0131n hash'ini al\u0131p kar\u015F\u0131la\u015Ft\u0131r\u0131r:"}),"\n",(0,n.jsx)(d.A,{filename:"services/token_service.py",code:`async def verify_refresh_token(db, raw_token: str):
+  token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+  record = await db.scalar(select(RefreshTokens).where(RefreshTokens.token_hash == token_hash))
+  if record is None or record.is_revoked or record.expires_at < datetime.now(timezone.utc):
+      raise AuthenticationError(code="auth.refresh_token_invalid")
+  return record`}),"\n",(0,n.jsx)(s.h2,{id:"rotasyon-ve-iptal",children:"Rotasyon ve iptal"}),"\n",(0,n.jsxs)(s.ul,{children:["\n",(0,n.jsxs)(s.li,{children:[(0,n.jsx)(s.strong,{children:"Logout"})," \u2192 ",(0,n.jsx)(s.code,{children:"is_revoked = true"})]}),"\n",(0,n.jsxs)(s.li,{children:[(0,n.jsx)(s.strong,{children:(0,n.jsx)(s.code,{children:"/auth/refresh"})})," \u2192 eski token ",(0,n.jsx)(s.code,{children:"is_revoked = true"}),", yeni token \xfcretilip d\xf6ner (ayn\u0131 token iki kez kullan\u0131lamaz; ikinci kullan\u0131m denemesi zaten iptal edilmi\u015F bir token'a denk gelir \u2014 \xe7al\u0131nt\u0131 token bu \u015Fekilde g\xf6r\xfcn\xfcr hale gelir)"]}),"\n",(0,n.jsx)(s.li,{children:"Access token iptal edilemez, bu y\xfczden \xf6mr\xfc k\u0131sa tutulur"}),"\n"]}),"\n",(0,n.jsx)(s.h2,{id:"notlar",children:"Notlar"}),"\n",(0,n.jsxs)(s.ul,{children:["\n",(0,n.jsxs)(s.li,{children:[(0,n.jsx)(s.code,{children:"jwt_secret"})," ",(0,n.jsx)(s.code,{children:".env"}),"'den okunur (bkz. ",(0,n.jsx)(s.a,{href:"/guides/coding-standards",children:"coding-standards"}),")"]}),"\n",(0,n.jsxs)(s.li,{children:["\u0130mza simetrik (",(0,n.jsx)(s.code,{children:"HS256"}),") \u2014 token'\u0131 tek bir servis (Auth Service) do\u011Frulad\u0131\u011F\u0131 s\xfcrece yeterli"]}),"\n",(0,n.jsxs)(s.li,{children:["Refresh token ",(0,n.jsx)(s.code,{children:"httpOnly"})," cookie'de tutulur, ",(0,n.jsx)(s.code,{children:"localStorage"}),"'da de\u011Fil"]}),"\n",(0,n.jsxs)(s.li,{children:["Hata mesajlar\u0131 burada da ",(0,n.jsx)(s.code,{children:"code"})," \xfczerinden d\xf6ner, hardcoded metin de\u011Fil (bkz. ",(0,n.jsx)(s.a,{href:"/guides/coding-standards#i18n--backend-asla-nihai-dilde-metin-d%C3%B6nd%C3%BCrmez",children:"i18n notu"}),")"]}),"\n"]})]})}function u(e={}){let{wrapper:s}={...(0,i.R)(),...e.components};return s?(0,n.jsx)(s,{...e,children:(0,n.jsx)(m,{...e})}):m(e)}},3444(e,s,r){r.d(s,{A:()=>t});let t={wrapper:"wrapper_UqJF",left:"left_Khj9",right:"right_MBg3",card:"card__wwS",methodRow:"methodRow_hbbX",method:"method_MpkS",methodPost:"methodPost_tz0m",methodGet:"methodGet_kHLq",path:"path_uPWA",section:"section_NH6t",sectionLabel:"sectionLabel_iVbs",headers:"headers_Eh_P",codeLines:"codeLines_fK0e",codeLine:"codeLine_vR8c",lineNumber:"lineNumber_axEd",lineContent:"lineContent_svct",key:"key_u3bo",string:"string_qbLq",boolean:"boolean_Msbt",number:"number_nIJk",comment:"comment_nGXz",keyword:"keyword_a4qP",decorator:"decorator_Q7bq",filenameRow:"filenameRow_bNcE",divider:"divider_XscS"}},2783(e,s,r){r.d(s,{A:()=>a});var t=r(4848),n=r(3444);function i({text:e}){let s=e.split("\n");return(0,t.jsx)("div",{className:n.A.codeLines,children:s.map((e,s)=>(0,t.jsxs)("div",{className:n.A.codeLine,children:[(0,t.jsx)("span",{className:n.A.lineNumber,children:s+1}),(0,t.jsx)("span",{className:n.A.lineContent,children:e.split(/("(?:[^"\\]|\\.)*"|\btrue\b|\bfalse\b|\bnull\b|\b-?\d+(?:\.\d+)?\b)/g).map((s,r)=>{if(!s)return null;if(s.startsWith('"')){let i=e.slice(e.indexOf(s)+s.length).trimStart().startsWith(":");return(0,t.jsx)("span",{className:i?n.A.key:n.A.string,children:s},r)}return/^(true|false|null)$/.test(s)?(0,t.jsx)("span",{className:n.A.boolean,children:s},r):/^-?\d+(\.\d+)?$/.test(s)?(0,t.jsx)("span",{className:n.A.number,children:s},r):s})})]},s))})}function a({method:e,path:s,request:r,requestHeaders:d,response:o,children:l}){return(0,t.jsxs)("div",{className:n.A.wrapper,children:[(0,t.jsx)("div",{className:n.A.left,children:l}),(0,t.jsx)("div",{className:n.A.right,children:(0,t.jsxs)("div",{className:n.A.card,children:[(0,t.jsxs)("div",{className:n.A.methodRow,children:[(0,t.jsx)("span",{className:`${n.A.method} ${"GET"===e?n.A.methodGet:n.A.methodPost}`,children:e}),(0,t.jsx)("span",{className:n.A.path,children:s})]}),(r||d)&&(0,t.jsxs)("div",{className:n.A.section,children:[(0,t.jsx)("div",{className:n.A.sectionLabel,children:"request"}),d&&(0,t.jsx)("div",{className:n.A.headers,children:Object.entries(d).map(([e,s])=>(0,t.jsxs)("div",{children:[(0,t.jsx)("span",{className:n.A.key,children:e}),": ",(0,t.jsx)("span",{className:n.A.string,children:s})]},e))}),r?(0,t.jsx)(i,{text:JSON.stringify(r,null,2)}):null]}),(0,t.jsx)("div",{className:n.A.divider}),(0,t.jsxs)("div",{className:n.A.section,children:[(0,t.jsx)("div",{className:n.A.sectionLabel,children:"response"}),(0,t.jsx)(i,{text:JSON.stringify(o,null,2)})]})]})})]})}},3937(e,s,r){r.d(s,{A:()=>a});var t=r(4848),n=r(3444);let i=RegExp("(?<comment>#.*$)|(?<string>'(?:[^'\\\\]|\\\\.)*'|\"(?:[^\"\\\\]|\\\\.)*\")|(?<decorator>@\\w+)|(?<keyword>\\b(?:def|class|import|from|as|return|raise|try|except|finally|async|await|if|elif|else|for|while|with|pass|None|True|False|self|and|or|not|in|is|lambda)\\b)|(?<number>\\b\\d+(?:\\.\\d+)?\\b)","gm");function a({filename:e,code:s}){let r=s.replace(/^\n+|\n+$/g,"").split("\n");return(0,t.jsxs)("div",{className:n.A.card,children:[(0,t.jsx)("div",{className:n.A.filenameRow,children:e}),(0,t.jsx)("div",{className:n.A.section,children:(0,t.jsx)("div",{className:n.A.codeLines,children:r.map((e,s)=>(0,t.jsxs)("div",{className:n.A.codeLine,children:[(0,t.jsx)("span",{className:n.A.lineNumber,children:s+1}),(0,t.jsx)("span",{className:n.A.lineContent,children:function(e){let s=[],r=0,a=0;for(let d of e.matchAll(i)){let i=d.index??0;i>r&&s.push(e.slice(r,i));let o=d.groups??{},l=o.comment&&n.A.comment||o.string&&n.A.string||o.decorator&&n.A.decorator||o.keyword&&n.A.keyword||o.number&&n.A.number||void 0;s.push((0,t.jsx)("span",{className:l,children:d[0]},a++)),r=i+d[0].length}return r<e.length&&s.push(e.slice(r)),s}(e)})]},s))})})]})}}}]);
