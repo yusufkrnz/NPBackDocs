@@ -8,6 +8,7 @@ type CodeEditorProps = {
   filename: string;
   code: string;
   language?: Language;
+  highlightLines?: number[];
 };
 
 const PY_KEYWORDS =
@@ -59,10 +60,11 @@ function detectLanguage(filename: string): Language {
   return /\.(ts|tsx|js|jsx)$/.test(filename) ? 'typescript' : 'python';
 }
 
-export default function CodeEditor({ filename, code, language }: CodeEditorProps): ReactNode {
+export default function CodeEditor({ filename, code, language, highlightLines }: CodeEditorProps): ReactNode {
   const lang = language ?? detectLanguage(filename);
   const tokenRegex = buildTokenRegex(lang);
   const lines = code.replace(/^\n+|\n+$/g, '').split('\n');
+  const highlighted = new Set(highlightLines ?? []);
 
   return (
     <div className={clsx(styles.card, lang === 'typescript' ? styles.cardTs : styles.cardPy)}>
@@ -75,7 +77,7 @@ export default function CodeEditor({ filename, code, language }: CodeEditorProps
       <div className={styles.section}>
         <div className={styles.codeLines}>
           {lines.map((line, i) => (
-            <div className={styles.codeLine} key={i}>
+            <div className={clsx(styles.codeLine, highlighted.has(i + 1) && styles.codeLineError)} key={i}>
               <span className={styles.lineNumber}>{i + 1}</span>
               <span className={styles.lineContent}>{colorizeLine(line, tokenRegex)}</span>
             </div>

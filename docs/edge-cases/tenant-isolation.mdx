@@ -1,0 +1,43 @@
+---
+title: Tenant / RLS İzolasyonu
+sidebar_position: 4
+description: Guard zincirinde tenant ve satır bazlı (RLS) izolasyonla ilgili tespit edilen 2 uç durum — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Tenant / RLS İzolasyonu
+
+`guard_and_run` şu anki haliyle sadece `tenant_id` filtresi enjekte ediyor. Aşağıdaki 2 case, bunun **yeterli olmadığı** noktaları gösteriyor — tenant izolasyonu ile kullanıcı (row-level) izolasyonu aynı şey değil.
+
+## EDGE-CASE-015: Tenant Filtresi Var, Kullanıcı Bazlı (Row-Level) Yetki Yok
+
+**Risk: Yüksek.** Aynı tenant içindeki farklı kullanıcıların (örn. normal çalışan vs yönetici) görmemesi gereken satırlara (maaş, kişisel masraf) erişimini engelleyecek bir Row-Level Security katmanı yok — sadece tenant'lar birbirinden izole, aynı tenant içindeki kullanıcılar değil.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[4, 7]}
+  code={`def guard_and_run(raw_sql, tenant_id, allowed_tables):
+    ast = parse_sql(raw_sql)
+    safe_sql = inject_tenant_filter(ast, tenant_id=tenant_id)
+    # user_id bazlı satır filtresi YOK
+    return db.execute(safe_sql).fetchall()
+    # Aynı tenant'taki normal çalışan, yöneticinin maaş/masraf
+    # satırlarını da görebilir — sadece tenant izole edildi, kullanıcı değil`}
+/>
+
+## EDGE-CASE-019: Guard Sırası Bozulursa RLS Set Edilmeden Sorgu Çalışır
+
+**Risk: Yüksek.** Guard zinciri sabit sırayla çalışmak zorunda (`tenant_guard` → `rls_guard` → `sql_guard`). Sıra bozulur ve sorgu, Postgres session değişkeni (`app.current_tenant`) set edilmeden çalıştırılırsa, RLS policy `current_setting()` için `NULL` görür — policy `fail-open` yazılmışsa (yanlışlıkla) **tüm tenant'ların** satırları dönebilir.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[2, 7]}
+  code={`async def run_guards(ctx):
+    ctx = await sql_guard(ctx)      # SIRA YANLIŞ — RLS'ten ÖNCE çalışıyor
+    ctx = await rls_guard(ctx)      # SET app.current_tenant burada yapılıyor
+    return ctx
+# sql_guard içindeki db.execute, RLS session variable'ı set edilmeden önce çalışır
+# Postgres current_setting('app.current_tenant') NULL döner
+# Policy fail-open yazılmışsa: TÜM tenant'ların satırları döner`}
+/>

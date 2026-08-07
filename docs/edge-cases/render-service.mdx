@@ -1,0 +1,183 @@
+---
+title: render_service.py — build_render_event
+sidebar_position: 2
+description: build_render_event fonksiyonunda tespit edilen 10 uç durum — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# render_service.py — `build_render_event`
+
+Aşağıdaki kod üzerinde tespit edilmiş, **henüz hiçbiri çözülmemiş** 10 case. Her case'in altındaki kod bloğunda, sorunu tetikleyen satır kırmızı vurgulu.
+
+```python
+# services/render_service.py — mevcut hali
+def build_render_event(llm_decision: dict, real_rows: list[dict]) -> dict:
+    allowed_keys = set(real_rows[0].keys()) if real_rows else set()
+    role_map = llm_decision.get("role_map", {})
+    for key in role_map.values():
+        if key not in allowed_keys:
+            raise ValueError(f"ai.unknown_field_reference: {key}")
+    return {
+        "component": llm_decision["component"],
+        "props": {**role_map, "data": real_rows},
+    }
+```
+
+## EDGE-CASE-001: Heterojen Satırlarda Yanlış Whitelist
+
+**Risk: Orta.** `allowed_keys`, `real_rows[0]` yani sadece ilk satırın key'lerinden türetiliyor. Satırlar arasında farklı kolonlar varsa (örn. `LEFT JOIN` sonucu bazı satırlarda eksik/null alanlar), whitelist yanlış/eksik olur.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[11]}
+  code={`real_rows = [
+    {"id": 1, "name": "A"},
+    {"id": 2, "name": "B", "discount": 10},
+]
+
+# allowed_keys sadece ilk satırdan çıkarılır:
+allowed_keys = {"id", "name"}
+
+# "discount" whitelist'e hiç girmedi, 2. satırda gerçekten var olmasına rağmen
+role_map = {"discountLabel": "discount"}
+# -> ValueError: ai.unknown_field_reference: discount`}
+/>
+
+## EDGE-CASE-002: Boş `real_rows` Durumunda Otomatik Ret
+
+**Risk: Orta.** `real_rows` boşsa `allowed_keys` boş küme oluyor. `role_map` içinde herhangi bir alan varsa döngü otomatik `ValueError` fırlatıyor — data yokken component'i "boş state" olarak render etmek isteyen meşru bir case bile burada kırılıyor.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[6]}
+  code={`real_rows = []          # kullanıcı henüz veri girmemiş
+allowed_keys = set()   # boş küme
+
+role_map = {"xKey": "expenses"}  # component'in state referansı
+
+# -> ValueError: ai.unknown_field_reference: expenses
+# Oysa bu meşru bir durum: "boş state" ile component'i yine de göstermek isteyebiliriz`}
+/>
+
+## EDGE-CASE-003: `role_map` Tip Kontrolü Yok
+
+**Risk: Yüksek.** `llm_decision.get("role_map", {})` ile güvenli erişim var ama dönen değerin gerçekten `dict` olduğu doğrulanmıyor. LLM `role_map` alanına string, list veya null dönerse `.values()` çağrısı `AttributeError` fırlatır — kontrollü bir hata değil.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[5]}
+  code={`llm_decision = {"component": "DataTable", "role_map": "invalid_string"}
+
+role_map = llm_decision.get("role_map", {})  # "invalid_string" — bir string, dict değil
+role_map.values()
+# -> AttributeError: 'str' object has no attribute 'values'
+# Servis 500 döner, kontrollü bir ValueError değil`}
+/>
+
+## EDGE-CASE-004: `role_map` Anahtarları (Prop İsimleri) Doğrulanmıyor
+
+**Risk: Yüksek.** Kod sadece `role_map.values()` (field referanslarını) kontrol ediyor. `role_map.keys()` yani component'e enjekte edilecek prop isimleri hiçbir whitelist'e karşı doğrulanmıyor.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[2, 7]}
+  code={`# Sadece VALUE'lar (field referansları) kontrol ediliyor:
+role_map = {"onClick": "delete_all_users"}
+#            ^^^^^^^ bu KEY hiç doğrulanmıyor
+
+for key in role_map.values():          # sadece "delete_all_users" kontrol edilir
+    if key not in allowed_keys: ...
+# "onClick" prop'u hiçbir engelden geçmeden component'e enjekte edilir`}
+/>
+
+## EDGE-CASE-005: `component` Alanı Hiç Doğrulanmıyor
+
+**Risk: Yüksek.** `llm_decision["component"]` doğrudan alınıp döndürülüyor, herhangi bir whitelist/catalog kontrolüne tabi tutulmuyor. Field referansları için whitelist varken component adı için yok — asimetrik bir güvenlik kontrolü.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[1, 4]}
+  code={`llm_decision = {"component": "<script>alert(1)</script>", "role_map": {}}
+
+return {
+    "component": llm_decision["component"],  # hiç whitelist kontrolü yok
+    "props": {...},
+}
+# Frontend COMPONENTS[component_name] gibi bir lookup yapıyorsa
+# bu rastgele string doğrudan sisteme sızar`}
+/>
+
+## EDGE-CASE-006: `component` Erişiminde Tutarsız Hata Yönetimi
+
+**Risk: Düşük-Orta.** `role_map` için `.get(..., {})` kullanılırken, `component` için doğrudan `llm_decision["component"]` (`[...]`) kullanılıyor. Key yoksa kontrollü `ValueError` yerine ham `KeyError` fırlar.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[4, 5]}
+  code={`llm_decision = {"role_map": {}}   # "component" alanı hiç yok
+
+role_map = llm_decision.get("role_map", {})   # .get() — güvenli
+component = llm_decision["component"]          # [...] — güvenli DEĞİL
+# -> KeyError: 'component'
+# Anlaşılır bir ValueError yerine ham stack trace`}
+/>
+
+## EDGE-CASE-007: `role_map` İçinde `"data"` Key'i Sessizce Eziliyor
+
+**Risk: Orta (debug maliyeti yüksek).** `{**role_map, "data": real_rows}` yapısında, `role_map` içinde `"data"` adında bir key varsa, sondaki `"data": real_rows` onu sessizce override ediyor. Hata da uyarı da yok.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[3]}
+  code={`role_map = {"data": "custom_field"}   # LLM bunu "data" rolüne atamaya çalıştı
+
+props = {**role_map, "data": real_rows}
+# props["data"] artık real_rows — role_map'teki "custom_field" ataması
+# hiçbir hata/uyarı olmadan kayboldu`}
+/>
+
+## EDGE-CASE-008: Layout / Nested Component Desteği Yok
+
+**Risk: Yüksek (ürün gereksinimini karşılamıyor).** Fonksiyon tek seviyeli, tek component'lik bir render event üretiyor. "İki bileşeni yan yana göster" veya "kendi dashboard'unu kur" gibi çok-component / iç içe (nested tree) talepleri şu anki yapıda desteklenmiyor.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[7]}
+  code={`# Kullanıcı: "grafiği ve tabloyu yan yana koy"
+# Fonksiyonun döndürebileceği TEK şey:
+{"component": "LineChart", "props": {...}}
+# ya da
+{"component": "DataTable", "props": {...}}
+
+# İkisini birden, yan yana ifade edecek bir "children"/"Row" yapısı YOK`}
+/>
+
+## EDGE-CASE-009: State/Data Binding Ayrımı Yok
+
+**Risk: Orta-Yüksek (mimari kısıt).** `real_rows` doğrudan `props.data` içine gömülüyor; component'ler kendi state path'lerine (`{"$state": "/path"}`) referans vermiyor. Bu da aynı UI tanımının farklı data ile yeniden kullanılmasını (kişiselleştirme) engelliyor.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[6]}
+  code={`# Aynı dashboard'u farklı kullanıcı verisiyle yeniden render etmek istiyorsun
+# Ama data doğrudan props'a gömülü:
+props = {**role_map, "data": real_rows}
+
+# "$state": "/expenses" gibi bir referans yok
+# -> her kullanıcı için role_map + data yeniden üretilmek zorunda`}
+/>
+
+## EDGE-CASE-010: Şema Bazlı Prop Validasyonu Yok
+
+**Risk: Yüksek.** Whitelist kontrolü sadece "field mevcut mu" seviyesinde; component'in hangi prop'ları, hangi tipte kabul ettiğine dair (Zod/Pydantic gibi) bir şema kontrolü yok.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[1, 4]}
+  code={`role_map = {"format": "banana"}   # Metric component'i "currency"|"percent"|"number" bekliyor
+
+# Whitelist sadece "field var mı" kontrol eder, TİP/ENUM kontrol etmez
+# "format": "banana" sorunsuzca props'a geçer
+# Hata, component render aşamasına kadar yakalanmaz`}
+/>

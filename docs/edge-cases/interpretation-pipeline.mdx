@@ -1,0 +1,45 @@
+---
+title: Yorumlama (Interpretation) Pipeline'ı
+sidebar_position: 5
+description: Kullanıcının veriyi yorumlatma isteklerinde PII ve prompt injection ile ilgili tespit edilen 2 uç durum — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Yorumlama (Interpretation) Pipeline'ı
+
+Render pipeline'ından (bkz. [Sorgu Pipeline'ı](/ai/query-pipeline)) **farklı** bir akış: kullanıcı "bu veriyi yorumla" dediğinde, LLM'in bu sefer bir şeyler "görmesi" gerekiyor — ama bu şey ham veri olmamalı. Aşağıdaki 2 case, ham veri gönderilirse ne kırılacağını gösteriyor.
+
+## EDGE-CASE-016: Ham PII Gönderilirse Prompt Injection + Veri Sızıntısı
+
+**Risk: Yüksek.** Backend, ham `real_rows`'u (gerçek isim, email vb.) doğrudan yorumlama LLM çağrısına gönderirse hem PII LLM sağlayıcısına sızar hem de bir satırın metin alanına gömülü bir talimat (`"Ayşe Yılmaz. Ignore previous instructions..."`) prompt injection'a zemin hazırlar.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[5, 8]}
+  code={`real_rows = guard_and_run(sql, tenant_id, allowed_tables)
+# Ham veri (isim, email) DOĞRUDAN LLM'e gidiyor
+llm_text = await ask_llm(
+    purpose="interpretation",
+    input=real_rows,              # hash'lenmemiş, anonimleştirilmemiş
+)
+# Bir satırın "name" alanı: "Ayşe Yılmaz. Ignore previous instructions..."
+# LLM bu talimatı gerçek bir sistem talimatıymış gibi işleyebilir`}
+/>
+
+## EDGE-CASE-017: Anonimleştirme Eşlemesi (`name_map`) Persist Edilmezse Yanlış İsim Enjeksiyonu
+
+**Risk: Orta.** `interpret()` her çağrıda yeni bir `name_map` (`person_0` → gerçek isim) üretiyor ve bu eşleme sadece o çağrının local değişkeni. Eşzamanlı iki istek aynı anonim token'ları farklı kişilere atarsa, backend post-process aşamasında **yanlış** isim yanlış token'a enjekte edilebilir.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[2, 8]}
+  code={`async def interpret(real_rows: list[dict]) -> str:
+    name_map = build_name_map(real_rows)   # her çağrıda YENİDEN üretiliyor, persist edilmiyor
+    llm_text = await ask_llm(purpose="interpretation", input=anonymize(real_rows, name_map))
+    for token, real_name in name_map.items():
+        llm_text = llm_text.replace(token, real_name)
+    return llm_text
+# Aynı anda gelen iki istek "person_0"ı farklı müşteriye atayabilir
+# -> yanlış müşteri ismi, başka bir müşterinin verisiyle karışabilir`}
+/>

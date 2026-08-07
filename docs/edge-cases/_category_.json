@@ -1,0 +1,9 @@
+{
+  "label": "Edge Case'ler",
+  "position": 7,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases",
+    "description": "Tespit edilmiş ama henüz çözülmemiş uç durumlar — kod/fonksiyon bazlı, ID'lenmiş, çözüm alanı ilerde doldurulacak."
+  }
+}

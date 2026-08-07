@@ -89,6 +89,12 @@
   display: flex;
 }
 
+.codeLineError {
+  background: rgba(239, 68, 68, 0.14);
+  border-left: 2px solid #ef4444;
+  margin-left: -2px;
+}
+
 .lineNumber {
   flex: 0 0 auto;
   width: 1.6rem;

@@ -1,0 +1,26 @@
+---
+title: Genel Bakış
+sidebar_position: 1
+description: Edge case dokümantasyon formatı ve neden bu bölüm ayrı tutuluyor.
+---
+
+# Edge Case'ler
+
+Bu bölüm, koda bakarak bulunmuş ama **henüz çözülmemiş** uç durumları listeler. Amaç: bir fonksiyon/servis üzerinde çalışırken fark edilen riskleri kaybetmemek, çözülene kadar görünür tutmak.
+
+## Format
+
+Her case aşağıdaki 4 alanla yazılır:
+
+- **Açıklama** — sorunun teknik olarak ne olduğu
+- **Risk Seviyesi** — Düşük / Orta / Yüksek
+- **Örnek Senaryo** — sorunu tetikleyen somut bir girdi/durum
+- **Çözüm** — çözülene kadar boş bırakılır; çözüldüğünde bu alan doldurulur ve case sayfada "çözüldü" olarak işaretlenir
+
+## Sayfalar
+
+- [render_service.py — build_render_event](/edge-cases/render-service) — EDGE-CASE-001 → 010
+- [Conversation / Memory Yönetimi](/edge-cases/conversation-memory) — EDGE-CASE-011 → 014
+- [Tenant / RLS İzolasyonu](/edge-cases/tenant-isolation) — EDGE-CASE-015, 019
+- [Yorumlama (Interpretation) Pipeline'ı](/edge-cases/interpretation-pipeline) — EDGE-CASE-016, 017
+- [Catalog / Component Versiyonlama](/edge-cases/catalog-versioning) — EDGE-CASE-018

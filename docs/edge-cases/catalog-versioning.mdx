@@ -1,0 +1,24 @@
+---
+title: Catalog / Component Versiyonlama
+sidebar_position: 6
+description: Persist edilmiş render ağaçlarının frontend component/kütüphane sürümüyle uyumsuz kalması — henüz çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Catalog / Component Versiyonlama
+
+## EDGE-CASE-018: Eski Render Ağacı, Yeni Component API'siyle Uyumsuz Kalır
+
+**Risk: Orta-Yüksek.** Bir dashboard/render ağacı persist edilirken hangi `catalog_version` ile üretildiği hiç kaydedilmiyor/kontrol edilmiyor. Frontend'in kullandığı kütüphane (örn. Recharts) major sürüm atlarsa (`^2.8.0` → `^2.10.0`), eski ağaçtaki bir prop'un (örn. `LineChart`'ın custom `dot` imzası) anlamı değişmiş olabilir — versiyon kontrolü/migration adımı olmadan bu sessizce kırılır.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[4, 5]}
+  code={`tree = await db.dashboards.find_one({"_id": dashboard_id})
+# tree["catalog_version"] hiç kaydedilmemiş / hiç kontrol edilmiyor
+# Frontend artık recharts ^2.10.0 kullanıyor, dot prop imzası değişti
+render(tree)
+# -> LineChart'ın custom dot'u ya render edilmiyor ya da TypeError fırlatıyor
+# Versiyon kontrolü/migration adımı yok`}
+/>

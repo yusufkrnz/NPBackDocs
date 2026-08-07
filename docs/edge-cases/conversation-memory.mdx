@@ -1,0 +1,76 @@
+---
+title: Conversation / Memory Yönetimi
+sidebar_position: 3
+description: Sohbet geçmişinin context'e taşınması ve query sonuçlarının saklanmasında tespit edilen 4 uç durum — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Conversation / Memory Yönetimi
+
+Bedrock (ve genel olarak LLM API'ları) konuşma geçmişini kendisi tutmuyor — backend her turn'de "hangi sohbetteyiz" (`conversation_id`) ve "geçmişte ne konuşulmuştu" bilgisini kendisi taşımak zorunda. Aşağıdaki 4 case, bu taşıma katmanında henüz çözülmemiş riskler.
+
+## EDGE-CASE-011: Conversation History Sınırsız Büyüyor
+
+**Risk: Yüksek.** Turn'ler (`user_message` + `llm_decisions`) hiçbir sliding-window veya özetleme (compaction) olmadan birikiyor. Uzun bir sohbette her LLM çağrısına **tüm geçmiş** ekleniyor — hem maliyet katlanarak artar hem de bir noktada modelin context limiti aşılır.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[3, 7]}
+  code={`# routers/chat.py — hiç sliding window/özet yok
+context = []
+for t in conversation.turns:                     # TÜM geçmiş, sınır yok
+    context.append({"role": "user", "content": t.user_message})
+    context.append({"role": "assistant", "content": json.dumps(t.llm_decisions)})
+
+llm_response = await ask_llm(context=context)     # 50. turn'de context limiti aşılır`}
+/>
+
+## EDGE-CASE-012: `real_rows` Conversation Dokümanına Gömülürse 16MB Limiti Riski
+
+**Risk: Yüksek.** Query sonuçları (`real_rows`) ayrı bir koleksiyona/TTL referansına değil, doğrudan conversation dokümanına gömülürse (embed), MongoDB'nin 16MB doküman limitine yaklaşılır.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[6, 9]}
+  code={`# conversation dokümanına DOĞRUDAN gömülüyor
+await db.conversations.update_one(
+    {"_id": conv_id},
+    {"$push": {"turns": {
+        "user_message": message,
+        "result": real_rows,          # binlerce satır, doğrudan embed
+    }}},
+)
+# N. turn'den sonra: pymongo.errors.DocumentTooLarge`}
+/>
+
+## EDGE-CASE-013: Süresi Dolmuş Sonuç Referansına Erişim
+
+**Risk: Orta.** `query_results` koleksiyonu TTL ile (örn. 24 saat sonra) otomatik siliniyorsa, kullanıcı "az önceki tabloyu tekrar göster" dediğinde `result_ref` artık DB'de yoktur — bu durum ele alınmazsa ham bir `TypeError` kullanıcıya kadar sızar.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[4, 5]}
+  code={`result_ref = turn["result_ref"]
+result = await db.query_results.find_one({"_id": result_ref})
+# TTL süresi dolmuşsa result artık None
+rows = result["rows"]
+# -> TypeError: 'NoneType' object is not subscriptable
+# Kullanıcıya "sonuç süresi doldu" yerine ham hata dönüyor`}
+/>
+
+## EDGE-CASE-014: `conversation_id` ↔ `user_id` Çapraz Kontrolü Yok (IDOR)
+
+**Risk: Yüksek (yetkisiz erişim).** Bir sohbet okunurken `conversation_id`'nin gerçekten istek atan kullanıcıya ait olduğu doğrulanmazsa, başka bir kullanıcının `conversation_id`'sini bilen/tahmin eden herkes o sohbetin tüm geçmişini okuyabilir — klasik IDOR.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[3, 4]}
+  code={`@router.post("/ai/chat")
+async def chat(req: ChatRequest, user=Depends(get_current_user)):
+    conv = await db.conversations.find_one({"_id": req.conversation_id})
+    # user.id ile conv["user_id"] HİÇ karşılaştırılmıyor
+    turns = conv["turns"]
+    # Başka bir kullanıcının conversation_id'sini bilen herkes
+    # o sohbetin tüm geçmişini okuyabilir`}
+/>
