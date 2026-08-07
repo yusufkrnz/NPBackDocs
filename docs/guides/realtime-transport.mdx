@@ -1,0 +1,77 @@
+---
+title: Gerçek Zamanlı Taşıma — SSE vs WebSocket
+sidebar_position: 6
+description: Backend'den client'a tek yönlü akan olaylar (AI render event'leri, bildirimler vb.) için neden WebSocket değil SSE kullanıyoruz.
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Gerçek Zamanlı Taşıma — SSE vs WebSocket
+
+Backend'in ürettiği bir sonucu (AI render event'i, bildirim, uzun süren bir işin ilerleme durumu vb.) client'a **anlık** ulaştırmak istediğimiz her yerde aynı karar tekrar karşımıza çıkıyor: WebSocket mi, SSE mi? Bu sayfa bu kararı bir kere, genel olarak açıklıyor — belirli bir özelliğe değil, taşıma katmanının kendisine dair.
+
+## Neden çift yönlü bir protokole ihtiyacımız yok
+
+WebSocket tam çift yönlü (full-duplex): client de backend'e istediği an mesaj gönderebilir. Ama bizim senaryolarımızın büyük çoğunluğunda akış **tek yönlü** — backend üretir, client dinler; client'ın yeni bir istek göndermesi gerektiğinde bunu zaten ayrı, normal bir HTTP isteğiyle yapıyor. Çift yönlülüğün maliyetini gereksiz yere ödemenin bir anlamı yok.
+
+Multi-tenant bir SaaS'ta bu maliyet somut:
+
+- **WebSocket**: her bağlantı stateful bir soket — sunucuda sürekli açık tutulur, load balancer'da sticky session gerektirir. Yüzlerce/binlerce tenant aynı anda bağlıysa, kullanıcı hiç mesaj yazmasa bile bağlantı açık kalır. Reconnect, heartbeat, ping/pong mantığını siz yazmak zorundasınız.
+- **SSE (Server-Sent Events)**: düz HTTP üzerinden, tek yönlü. Bağlantı sadece istek sırasında açık, cevap bitince kapanır. Tarayıcının yerleşik `EventSource` API'si reconnect'i otomatik halleder. Standart HTTP altyapınızla (nginx, çoğu managed load balancer) sürtüşmez. Anthropic/OpenAI'ın kendi streaming yanıtlarında kullandığı desen de bu.
+
+## Backend tarafı
+
+<CodeRail>
+  <CodeEditor
+    filename="routers/chat.py"
+    code={`from fastapi.responses import StreamingResponse
+import json
+
+@router.post("/ai/chat-stream")
+async def chat_stream(request: ChatRequest):
+    async def event_generator():
+        render_event = await run_pipeline(request)  # pipeline'ın kendisi değişmiyor
+
+        # SSE formatı: "data: <json>\\n\\n"
+        yield f"data: {json.dumps(render_event)}\\n\\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")`}
+  />
+</CodeRail>
+
+## Client tarafı
+
+<CodeRail>
+  <CodeEditor
+    filename="hooks/useAiRenderEvents.ts"
+    code={`function useAiRenderEvents(message: string) {
+  const [elements, setElements] = useState<ReactNode[]>([]);
+
+  useEffect(() => {
+    const source = new EventSource(\`/ai/chat-stream?message=\${encodeURIComponent(message)}\`);
+
+    source.onmessage = (event) => {
+      const { component, props } = JSON.parse(event.data);
+      const Component = COMPONENT_REGISTRY[component];
+      if (!Component) return;
+      setElements((prev) => [...prev, <Component key={prev.length} {...props} />]);
+    };
+
+    source.addEventListener("done", () => source.close());
+    return () => source.close();
+  }, [message]);
+
+  return elements;
+}`}
+  />
+</CodeRail>
+
+## Ne zaman WebSocket gerçekten gerekir
+
+WebSocket'in gerçek avantajı, client'ın da akış sırasında backend'e veri göndermesi gerektiğinde ortaya çıkar — ör. kullanıcının akışı "durdur" demesi, ya da eşzamanlı çift yönlü bir sohbet (canlı imleç paylaşımı gibi). Böyle bir ihtiyaç doğduğunda WebSocket'e geçilir; tek yönlü akan her şey (AI render event'leri dahil) için SSE yeterli ve daha ucuzdur.
+
+:::info Nerede kullanılıyor
+AI katmanının render event'lerini client'a taşıma şekli için bkz. [Sorgu Pipeline'ı — Client'ta anlık render](/ai/query-pipeline#6--clientta-anlık-render).
+:::

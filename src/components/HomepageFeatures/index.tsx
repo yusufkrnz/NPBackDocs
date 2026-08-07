@@ -36,6 +36,11 @@ const FeatureList: FeatureItem[] = [
     to: '/aws',
     description: 'Kullandığımız AWS servisleri — Bedrock ve ileride eklenecek diğerleri.',
   },
+  {
+    title: 'Entegrasyonlar',
+    to: '/integrations',
+    description: 'Üçüncü taraf ERP/CRM yazılımlarıyla entegrasyon planı (yakında).',
+  },
 ];
 
 function Feature({title, description, to}: FeatureItem) {

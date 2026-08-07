@@ -51,6 +51,26 @@
   color: #e4e4e7;
   white-space: pre;
   overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #52525b #0a0a0a;
+}
+
+.code::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.code::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+.code::-webkit-scrollbar-thumb {
+  background: #52525b;
+  border-radius: 4px;
+}
+
+.code::-webkit-scrollbar-thumb:hover {
+  background: #71717a;
 }
 
 .key {

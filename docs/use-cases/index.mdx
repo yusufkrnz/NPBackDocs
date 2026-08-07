@@ -1,14 +1,25 @@
 ---
 title: Kullanım Senaryoları
 sidebar_position: 1
-description: Kullanım senaryosu sayfaları için şablon.
+description: Auth akışında nereden başlanır — adım adım okuma sırası.
 ---
 
 # Kullanım Senaryoları
 
-Her uçtan uca senaryo için burada ayrı bir sayfa açılır (`docs/use-cases/<senaryo-adı>.mdx`). İlk senaryo (ör. `user-registration`) eklendiğinde şu şablonu kullanın:
+NewPortal bir B2B SaaS — sistemde "bireysel kullanıcı" yoktur, her kullanıcı bir **tenant**'a (şirket) bağlıdır. Auth ile ilgili sayfalar iki bölüme yayılmış durumda: buradaki sayfalar **akışı** (ne, hangi sırayla olur) anlatır; [Servisler](/services) altındakiler **referans** detayını (endpoint, kod) tutar. Yeni birinin sistemi baştan sona anlaması için önerilen okuma sırası:
 
-## Şablon
+1. [Kayıt olma](/use-cases/user-registration) — ilk kişi kayıt olduğunda **tenant + admin birlikte** oluşur
+2. [E-posta Doğrulama](/services/auth-service/email-verification) — hesap aktifleşmeden login çalışmaz
+3. [Login ve token oluşturma](/use-cases/login-and-token-issuance) — access/refresh token nasıl alınır
+4. [Ekip Daveti](/use-cases/team-invitation) — admin, aynı tenant'a başka kullanıcı nasıl ekler (tek self-servis olmayan giriş yolu)
+5. [Profil](/services/auth-service/profile) — token'la korumalı bir endpoint'e ilk erişim örneği
+6. [Şifre Sıfırlama](/services/auth-service/password-reset) — sıralı akışın parçası değil, ihtiyaç anında devreye giren ayrı bir dal
+
+Token'ın kendisinin (access/refresh, rotasyon) nasıl üretildiği bu sayfaların hiçbirinde tekrar anlatılmaz — hepsi [Token Design](/services/auth-service/token-design)'a link verir, tek doğruluk kaynağı orasıdır. Tenant/DB izolasyonunun genel stratejisi (shared-schema + `tenant_id`, migration'ların tek sette uygulanması) için bkz. [Multi-tenancy](/guides/multi-tenancy).
+
+## Yeni bir senaryo eklerken
+
+Her uçtan uca senaryo için burada ayrı bir sayfa açılır (`docs/use-cases/<senaryo-adı>.mdx`). Şablon:
 
 ````markdown
 # <Senaryo Adı>

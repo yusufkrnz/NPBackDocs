@@ -2,7 +2,11 @@
 title: Genel Bakış
 sidebar_position: 1
 description: LLM'in ekrana dinamik UI basmasını sağlayan mimarinin neden bu şekilde kurulduğu.
+wide_toc: true
 ---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
 
 # AI Katmanı — Genel Bakış
 
@@ -23,6 +27,50 @@ Bu mimarinin endüstri karşılığı **"guardrailed generative UI"** — LLM ar
 > LLM hiçbir zaman gerçek endpoint URL'ini, DB bağlantısını, secret'ı ya da gerçek veri değerini görmez — sadece "bu isimde bir şey var, şu şekli/tipi alır" bilgisini görür.
 
 Bu son madde kritik ve sıkça kaçırılıyor: LLM'e "veriyi getir" dedirtip dönen sonucu (gerçek müşteri adı, tutar, sipariş no gibi) tekrar LLM'e verip "şimdi bunu göster" dedirtmek — LLM'in konuşma geçmişine gerçek, potansiyel hassas veri sokmak demektir. Bunun yerine LLM'e sonucun sadece **şekli** (kaç satır, hangi kolonlar, hangi tip) verilir; LLM hangi component'i seçeceğine bu şekle bakarak karar verir. Gerçek satır verisi, LLM'in kararından **sonra**, backend tarafından client'a giden JSON'a eklenir — LLM bu veriyi hiç görmez, üretmez. Detay için bkz. [Neden LLM'e Ham Veri/Endpoint Vermiyoruz](/ai/why-no-raw-data).
+
+### Peki veri gerçekte nasıl ekrana basılıyor
+
+En sık sorulan soru bu: LLM veriyi hiç görmüyorsa, tabloyu dolduran gerçek satırlar nereden geliyor? Cevap: LLM'in kararı ile gerçek veri, LLM'in hiç haberi olmadan backend'de **birleştiriliyor** (merge):
+
+<CodeRail>
+  <CodeEditor
+    filename="services/render_service.py"
+    code={`def build_render_event(llm_decision: dict, real_rows: list[dict]) -> dict:
+    # llm_decision = {"component": "DataTable", "columns": ["Müşteri", "Tutar"]}
+    # LLM'in kararında "rows" hiç yok — şema buna izin vermiyor (bkz. JSON Schema)
+    component = llm_decision["component"]
+    columns = llm_decision["columns"]
+
+    # Gerçek satırlar burada ekleniyor — LLM'in kararından SONRA, backend tarafından
+    return {
+        "component": component,
+        "props": {
+            "columns": columns,
+            "rows": real_rows,
+        },
+    }`}
+  />
+</CodeRail>
+
+Bu fonksiyonun çağrıldığı yer, akışın tamamını özetler:
+
+<CodeRail>
+  <CodeEditor
+    filename="routers/chat.py"
+    code={`# 1) Gerçek veri, LLM'e hiç gitmeden, doğrudan DB'den çekilir
+tool_result = await run_tool(tool_call.name, tool_call.input)
+
+# 2) LLM'e sadece ŞEKİL gönderilir (satır sayısı, kolon adları/tipleri) — bkz. Akış
+llm_decision = await ask_llm_to_choose_component(shape_of(tool_result))
+
+# 3) Gerçek veri + LLM'in kararı burada birleştirilir — LLM bu adımı hiç görmez
+render_event = build_render_event(llm_decision, real_rows=tool_result["rows"])
+
+await send_to_client(render_event)`}
+  />
+</CodeRail>
+
+`real_rows`, adım 1'de zaten backend'in elinde — LLM'e hiç gönderilmedi, sadece bekletildi. LLM'in tek katkısı `component` ve `columns` seçmek; `rows`'u LLM ne üretiyor ne de görüyor.
 
 Üç bileşen:
 

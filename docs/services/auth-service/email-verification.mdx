@@ -6,7 +6,7 @@ description: Kayıt sonrası hesap aktivasyonu — doğrulama token'ı üretimi 
 
 # E-posta Doğrulama
 
-`/auth/register` sonrası hesap `is_active = false` ile oluşturulur; doğrulama tamamlanana kadar login engellenir.
+[Kayıt olma](/use-cases/user-registration) sonrası hesap `is_active = false` ile oluşturulur; doğrulama tamamlanana kadar login engellenir. Bu sayfa sadece doğrulama adımını anlatır — kayıt isteğinin kendisi için bkz. [Kayıt olma](/use-cases/user-registration).
 
 ## Akış
 
@@ -17,10 +17,9 @@ sequenceDiagram
     participant DB
     participant Mail as E-posta servisi
 
-    Client->>Auth: POST /auth/register
-    Auth->>DB: Users (is_active=false) + doğrulama token'ı oluştur
-    Auth->>Mail: doğrulama linki gönder
-    Auth-->>Client: 201
+    Note over Client,DB: Kayıt zaten tamamlandı (bkz. Kayıt olma) — Users.is_active = false
+
+    Auth->>Mail: doğrulama linki gönder (async, arq kuyruğu üzerinden)
 
     Client->>Auth: POST /auth/verify-email {token}
     Auth->>DB: token hash'ini doğrula (süre + is_used)
@@ -32,4 +31,4 @@ sequenceDiagram
 
 - Doğrulama token'ı da [Token Design](/services/auth-service/token-design)'daki gibi random + hash üretilir, TTL 24 saat
 - `is_active = false` durumundaki hesap `/auth/login`'de `AuthenticationError` (401) alır — token süresi dolduysa yeni doğrulama e-postası isteme (`/auth/resend-verification`) ile çözülür
-- E-posta gönderimi senkron HTTP döngüsünde yapılmaz, async kuyruğa (BullMQ/Celery benzeri) bırakılır — kullanıcı e-posta servisinin yavaşlığını beklemez
+- E-posta gönderimi senkron HTTP döngüsünde yapılmaz, [arq](/guides/libraries) kuyruğuna bırakılır — kullanıcı e-posta servisinin yavaşlığını beklemez

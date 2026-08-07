@@ -28,7 +28,7 @@ Her kütüphane seçimi aynı üç soruya cevap verir: **Durum** (bu olmadan han
 
 **Çözüm:** Her şema değişikliği sıralı, versiyonlanmış bir migration dosyasıdır. `alembic upgrade head` her ortamda aynı sırayla, tekrarlanabilir şekilde çalışır; SQLAlchemy modelinden `--autogenerate` ile taslak migration üretir.
 
-**Etki:** Tenant sayısı arttıkça şema senkronizasyonu manuel takip gerektirmez; CI/CD'de "migration'ları uygula" tek komut olur.
+**Etki:** Tenant sayısı arttıkça şema senkronizasyonu manuel takip gerektirmez; CI/CD'de "migration'ları uygula" tek komut olur. Neden tek migration setinin yeterli olduğu (shared-schema stratejimiz) için bkz. [Multi-tenancy](/guides/multi-tenancy).
 
 **Referans:** https://alembic.sqlalchemy.org/
 
@@ -91,3 +91,15 @@ Her kütüphane seçimi aynı üç soruya cevap verir: **Durum** (bu olmadan han
 **Etki:** [coding-standards](/guides/coding-standards)'taki `schemas/` katmanında tanımlanan tek bir tip; hem validasyonu hem Swagger dokümantasyonunu hem IDE autocomplete'ini aynı anda sağlar.
 
 **Referans:** https://docs.pydantic.dev/
+
+---
+
+## Değerlendirilip seçilmeyenler
+
+### fastapi-users — auth'u hazır paket olarak kurma
+
+FastAPI ekosisteminde register/login/reset/verify'ı paket olarak veren en bilinen kütüphane. Değerlendirdik, **seçmedik**:
+
+- Kullanıcı modeli tek-tenant varsayıyor — bizim "register = tenant + admin birlikte oluştur" ve "davetle üyeye tenant'a katıl" akışlarımız onun veri modeline doğal olarak oturmuyor, üstüne inşa etmek ciddi özelleştirme gerektirir
+- Kendi hata/response formatı var — bizim i18n `code` deseni ([coding-standards](/guides/coding-standards)) ve RFC 7807 `problem+json` biçimimizle uyuşmuyor, kütüphaneyle "savaşmak" hız kazandırmak yerine kaybettirir
+- **Sonuç:** düşük seviye, tek-amaçlı kütüphaneleri (PyJWT, bcrypt) kendi akışımıza göre birleştirmek, yüksek seviye bir framework'ü zorlamaktan daha az sürtünmeli çıktı

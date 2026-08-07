@@ -1,0 +1,46 @@
+---
+title: Genel Bakış
+slug: /services/tenant-service
+sidebar_position: 1
+description: Tenant Service'in sorumluluğu, bağımlılıkları ve endpoint'leri.
+---
+
+# Tenant Service
+
+## Sorumluluk
+
+Tenant (şirket) kaydının kendisi, ekibe yeni üye davet etme ve daveti kabul etme. [Auth Service](/services/auth-service) "bu kullanıcı kim" sorusuna cevap verirken, Tenant Service "bu kullanıcı **hangi şirkete ait** ve o şirkete başka kim eklenebilir" sorusuna cevap verir.
+
+Tenant, [Kayıt olma](/use-cases/user-registration) sırasında ilk kullanıcıyla birlikte oluşturulur — bu servisin kendi başına bir "tenant oluştur" endpoint'i yoktur, çünkü tenant'sız bir kullanıcı (veya kullanıcısız bir tenant) sistemde var olamaz.
+
+## Bağımlılıklar
+
+- `Tenants`, `Invitations` tabloları (bu servis sahibi)
+- `Users.tenant_id`, `Users.role` — [Auth Service](/services/auth-service)'in sahip olduğu tablo, bu servis sadece okur/günceller
+- `core/exceptions.py` — `AuthorizationError` (admin olmayan davet göndermeye çalışırsa), `ConflictError` (zaten üye olan e-posta davet edilirse)
+
+## Minimal yetki kontrolü
+
+[Auth Service genel bakış](/services/auth-service#authentication-vs-authorization--üç-katman)'taki üçlü ayrımı hatırlayın: genel bir rol/izin sistemi (RBAC) yok. Ama davet gönderme tek bir eylem için istisna — **sadece `role = admin` olan kullanıcı davet gönderebilir**. Bu, genel bir yetki matrisi değil, tek bir `if` kontrolü:
+
+```
+if current_user.role != "admin":
+    raise AuthorizationError(code="tenant.invite_requires_admin")
+```
+
+Gelecekte roller çoğalırsa (ör. `manager`, `viewer`) bu kontrol genel bir RBAC sistemine evrilebilir — şu an için tek satırlık bir kural yeterli.
+
+## Endpoint'ler
+
+| Method | Path | Açıklama | Detay |
+|---|---|---|---|
+| <span className="badge badge--success">POST</span> | `/team/invitations` | Ekibe yeni üye davet eder (admin-only) | [Ekip Daveti](/use-cases/team-invitation) |
+| <span className="badge badge--success">POST</span> | `/auth/accept-invite` | Davet token'ı ile hesap oluşturup tenant'a katılır | [Ekip Daveti](/use-cases/team-invitation) |
+
+## Hata durumları
+
+| Durum | Sınıf | HTTP |
+|---|---|---|
+| Admin olmayan davet göndermeye çalışırsa | `AuthorizationError` | 403 |
+| Zaten üye olan e-posta tekrar davet edilirse | `ConflictError` | 409 |
+| Davet token'ı süresi dolmuş/kullanılmış | `AuthenticationError` | 401 |

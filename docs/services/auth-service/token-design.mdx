@@ -2,27 +2,29 @@
 title: Token Design
 sidebar_position: 2
 description: Access ve refresh token'ın üretimi, doğrulanması, rotasyonu.
+wide_toc: true
 ---
 
 import ApiExample from '@site/src/components/ApiExample';
 import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+<CodeRail>
+  <ApiExample
+    method="POST"
+    path="/auth/refresh"
+    request={{ refresh_token: 'k3f9x...s0p2q' }}
+    response={{
+      access_token: 'eyJhbGciOiJIUzI1NiIs...',
+      refresh_token: 'p8m2z...q7w1e',
+      token_type: 'bearer',
+    }}
+  />
+</CodeRail>
 
 # Token Design
 
-<ApiExample
-  method="POST"
-  path="/auth/refresh"
-  request={{ refresh_token: 'k3f9x...s0p2q' }}
-  response={{
-    access_token: 'eyJhbGciOiJIUzI1NiIs...',
-    refresh_token: 'p8m2z...q7w1e',
-    token_type: 'bearer',
-  }}
->
-
-Access token süresi dolunca client bu endpoint'i çağırır. Dönen `refresh_token` **eskisinden farklıdır** — her çağrıda rotasyon uygulanır (bkz. [Rotasyon ve iptal](#rotasyon-ve-iptal)).
-
-</ApiExample>
+Access token süresi dolunca client `/auth/refresh`'i çağırır. Dönen `refresh_token` **eskisinden farklıdır** — her çağrıda rotasyon uygulanır (bkz. [Rotasyon ve iptal](#rotasyon-ve-iptal)).
 
 | | Access Token | Refresh Token |
 |---|---|---|
@@ -33,9 +35,10 @@ Access token süresi dolunca client bu endpoint'i çağırır. Dönen `refresh_t
 
 ## Access token üretimi
 
-<CodeEditor
-  filename="services/token_service.py"
-  code={`import jwt
+<CodeRail>
+  <CodeEditor
+    filename="services/token_service.py"
+    code={`import jwt
 from datetime import datetime, timedelta, timezone
 
 from core.settings import get_settings
@@ -51,15 +54,17 @@ def create_access_token(user_id: str) -> str:
         "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)`}
-/>
+  />
+</CodeRail>
 
 `sub` dışında (email, rol gibi) hiçbir kullanıcı bilgisi token'a gömülmez — rol her istekte DB'den taze okunur.
 
 ## Doğrulama
 
-<CodeEditor
-  filename="core/security.py"
-  code={`from fastapi import Depends
+<CodeRail>
+  <CodeEditor
+    filename="core/security.py"
+    code={`from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 
@@ -78,13 +83,15 @@ def get_current_user_id(creds: HTTPAuthorizationCredentials = Depends(bearer_sch
     except jwt.InvalidTokenError:
         raise AuthenticationError(code="auth.access_token_invalid")
     return payload["sub"]`}
-/>
+  />
+</CodeRail>
 
 ## Refresh token üretimi
 
-<CodeEditor
-  filename="services/token_service.py"
-  code={`import hashlib
+<CodeRail>
+  <CodeEditor
+    filename="services/token_service.py"
+    code={`import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -109,19 +116,22 @@ async def issue_refresh_token(db, user_id: str) -> str:
         )
     )
     return raw_token`}
-/>
+  />
+</CodeRail>
 
 Ham token DB'ye asla yazılmaz, sadece hash'i — şifrelerle aynı gerekçe. Doğrulama gelen token'ın hash'ini alıp karşılaştırır:
 
-<CodeEditor
-  filename="services/token_service.py"
-  code={`async def verify_refresh_token(db, raw_token: str):
+<CodeRail>
+  <CodeEditor
+    filename="services/token_service.py"
+    code={`async def verify_refresh_token(db, raw_token: str):
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     record = await db.scalar(select(RefreshTokens).where(RefreshTokens.token_hash == token_hash))
     if record is None or record.is_revoked or record.expires_at < datetime.now(timezone.utc):
         raise AuthenticationError(code="auth.refresh_token_invalid")
     return record`}
-/>
+  />
+</CodeRail>
 
 ## Rotasyon ve iptal
 

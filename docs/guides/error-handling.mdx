@@ -1,0 +1,105 @@
+---
+title: Merkezi Hata Yönetimi
+sidebar_position: 4
+description: Global exception handler — ServiceError, validasyon hataları ve beklenmeyen hatalar tek yerde nasıl ele alınır.
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Merkezi Hata Yönetimi
+
+[coding-standards](/guides/coding-standards)'ta `ServiceError` alt sınıflarını **ne zaman** fırlatacağınızı gördünüz. Bu sayfa, fırlatılan hatanın **client'a giden yanıta nasıl dönüştüğünü** anlatır — bu dönüşüm tek bir yerde, `main.py`'a kayıtlı global handler'larda olur; router veya service içinde asla `try/except` yazılmaz.
+
+<CodeRail>
+  <CodeEditor
+    filename="core/exceptions.py"
+    code={`import structlog
+from fastapi import Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+logger = structlog.get_logger()
+
+
+def _problem(request: Request, status_code: int, code: str, params: dict | None = None) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        media_type="application/problem+json",
+        content={
+            "type": f"https://newportal.dev/errors/{code}",
+            "code": code,
+            "params": params or {},
+            "status": status_code,
+            "instance": str(request.url.path),
+        },
+    )
+
+
+def register_exception_handlers(app) -> None:
+    @app.exception_handler(ServiceError)
+    async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+        # Beklenen hata — ValidationError, ConflictError, AuthenticationError vb.
+        logger.info("service_error", code=exc.code, path=request.url.path)
+        return _problem(request, exc.status_code, exc.code, exc.params)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # Pydantic'in kendi reddettiği istekler (tip uyuşmazlığı, eksik alan)
+        field_errors = [{"field": ".".join(map(str, e["loc"])), "code": e["type"]} for e in exc.errors()]
+        return _problem(request, status.HTTP_422_UNPROCESSABLE_ENTITY, "error.validation", {"fields": field_errors})
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        # Beklenmeyen HER ŞEY — bug, DB bağlantı kopması vb.
+        logger.error("unhandled_exception", path=request.url.path, exc_info=exc)
+        return _problem(request, status.HTTP_500_INTERNAL_SERVER_ERROR, "error.internal")`}
+  />
+</CodeRail>
+
+## Üç handler, üç senaryo
+
+Global handler seti üç farklı hata kaynağını kapsar — hiçbiri diğerinin işini yapmaz:
+
+| Handler | Ne zaman tetiklenir | Client ne görür |
+|---|---|---|
+| `ServiceError` | Kodun kendi bilerek fırlattığı hata (`raise ConflictError(code=...)`) | İlgili HTTP durumu + anlamlı `code` |
+| `RequestValidationError` | FastAPI/Pydantic isteği router'a ulaştırmadan reddettiğinde | `422` + hangi alanın neden reddedildiği |
+| `Exception` (catch-all) | Öngörülmemiş her şey — bug, timeout, beklenmeyen `None` | `500` + **sadece** `error.internal` — iç detay (stack trace, DB hata mesajı) asla client'a gitmez |
+
+### Neden catch-all şart
+
+Üçüncü handler olmadan, kodda unutulmuş bir `None.attribute` hatası FastAPI'nin varsayılan 500 sayfasına düşer — bu hem tutarsız bir yanıt şekli (bizim `problem+json` formatında değil) hem de potansiyel olarak stack trace/dahili bilgi sızıntısıdır. Catch-all, **her zaman** aynı şekle (`code`, `params`, `status`) sahip bir yanıt garanti eder.
+
+### Loglama
+
+Her handler [structlog](/guides/libraries) ile loglar — ama farklı seviyelerde: `ServiceError` beklenen bir durum olduğu için `info`, catch-all ise gerçek bir bug olabileceği için `error` ve tam `exc_info` ile. Log kaydına `request_id`/`tenant_id` otomatik eklenir çünkü structlog, [RequestID middleware](/guides/coding-standards)'in bağlam değişkenleriyle yapılandırılmıştır.
+
+<CodeRail>
+  <CodeEditor
+    filename="main.py"
+    code={`from fastapi import FastAPI
+
+from core.exceptions import register_exception_handlers
+from core.middleware import RequestIDMiddleware, AccessLogMiddleware, SecurityHeadersMiddleware
+from routers import auth, users
+
+app = FastAPI(title="NewPortal Backend")
+
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(AccessLogMiddleware)
+app.add_middleware(RequestIDMiddleware)
+
+register_exception_handlers(app)
+
+app.include_router(auth.router)
+app.include_router(users.router)`}
+  />
+</CodeRail>
+
+## `main.py`'a kayıt
+
+Handler'lar `register_exception_handlers(app)` ile tek satırda kaydedilir — middleware'lerden sonra, router'lardan önce.
+
+Router içinde `try/except` görüyorsanız bu bir kod incelemesi (code review) bulgusudur — o hatanın buradaki üç handler'dan biri tarafından zaten yakalanması gerekir.

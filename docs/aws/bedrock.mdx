@@ -16,9 +16,30 @@ LLM çağrılarımız doğrudan bir sağlayıcının kendi API'sine değil, **AW
 - **Tek fatura, çoklu model** — Anthropic, Meta, Amazon gibi farklı sağlayıcıların modelleri tek bir AWS faturasında, tek bir API şeklinde (Converse API) erişilebilir; sağlayıcı değiştirmek yeni bir SDK/entegrasyon gerektirmez.
 - **Bölge kontrolü** — veri hangi AWS bölgesinde işlenir, kurumsal/uyumluluk gereksinimlerine göre seçilebilir.
 
+## Servis uç noktaları
+
+Bedrock tek bir API değil, dördü ayrı yetkiye sahip dört uç noktadan oluşur — hangisini ne için kullandığımızı bilmek önemli:
+
+| Uç nokta | Katman | Bizde ne için |
+|---|---|---|
+| `bedrock` | Control plane | Model listeleme/yönetim — biz doğrudan kullanmıyoruz, `models` tablosu bunun yerine geçiyor |
+| `bedrock-runtime` | Data plane | `converse()` — asıl model çağrısı burada |
+| `bedrock-agent` | Control plane | Agent/Knowledge Base/Prompt **oluşturma** — biz kullanmıyoruz (aşağıya bkz.) |
+| `bedrock-agent-runtime` | Data plane | Agent/Knowledge Base **çağırma** — biz kullanmıyoruz |
+
+## Neden Bedrock Agents değil, Converse API + kendi orkestrasyonumuz
+
+Bedrock'un kendi "Agent" özelliği, tool seçimi → çağırma → sonucu değerlendirme döngüsünü **kendi içinde, opak şekilde** yönetir. Biz bunu **kullanmıyoruz** — bilerek. Sebep, [Güvenlik Modeli](/ai/security-model)'ndeki katmanlı savunma ilkesiyle doğrudan çelişiyor: Agent kullanırsak, LLM'in seçtiği tool'un whitelist'te olup olmadığını kontrol eden adım Bedrock'un içine gömülür, bizim kod tabanımızda **görünür ve denetlenebilir olmaktan çıkar**. Ham Converse API ile bu döngüyü kendi backend'imiz yönetiyor:
+
+1. LLM `toolUse` bloğu döner (bir öneri, bir emir değil)
+2. **Biz** ismi `TOOL_REGISTRY`'de arıyoruz (bkz. [Katalog / Registry](/ai/registry))
+3. **Biz** gerçek fonksiyonu çalıştırıyoruz, sonucu `toolResult` mesajı olarak paketleyip LLM'e geri veriyoruz
+
+Bedrock Agent'ta bu üç adım tek bir `invoke_agent()` çağrısının arkasında saklı olurdu — whitelist kontrolünü araya sokabileceğimiz bir nokta olmazdı.
+
 ## Model çağrısı — Converse API
 
-Bedrock'un Converse API'si, hangi sağlayıcının modelini çağırdığınızdan bağımsız **tek bir mesaj formatı** kullanır — tool use (bizim `tool_use`/`render_ui` akışımızın dayandığı mekanizma) burada da native olarak destekleniyor:
+Bedrock'un Converse API'si, hangi sağlayıcının modelini çağırdığınızdan bağımsız **tek bir mesaj formatı** kullanır — tool use (bizim `tool_use`/`render_ui` akışımızın dayandığı mekanizma) burada da native olarak destekleniyor. Modeller **stateless**'tir (her çağrı sıfırdan başlar, hiçbir şeyi hatırlamaz) — konuşma geçmişini her çağrıda biz göndeririz; bunu nasıl sınırlı tuttuğumuz için bkz. [Konuşma Bağlamı ve Token Bütçesi](/ai/conversation-context).
 
 <CodeEditor
   filename="services/bedrock_client.py"
@@ -58,3 +79,8 @@ Birincil model hata verirse (timeout, rate limit, 5xx) backend `llm_model_routin
 ## Maliyet ve token takibi
 
 Her çağrının `input_tokens`, `output_tokens`, `cost_usd` değerleri backend tarafından [llm_call_log](https://yusufkrnz.github.io/databaseschema/mongodb/llm-call-log)'a yazılır — fiyat, çağrı anındaki [model_pricing](https://yusufkrnz.github.io/databaseschema/postgres/platform/model-pricing) değeriyle hesaplanıp donmuş (frozen) olarak saklanır, fiyat sonradan değişse bile geçmiş kayıt bozulmaz. Bu sayfa sadece backend'in çağrıyı nasıl yaptığını anlatır; token bütçesini (context'e ne kadar mesaj koyacağımızı) nasıl sınırladığımız için bkz. [Konuşma Bağlamı ve Token Bütçesi](/ai/conversation-context).
+
+## Notlar
+
+- Her model aynı parametreleri desteklemez (ör. bazı modeller `system` prompt alanını desteklemez) — Converse API bunu tamamen soyutlamaz, hangi modelin neyi desteklediği `models` tablosunda (databaseschema) tutulur ve çağrı öncesi kontrol edilir
+- Knowledge Bases (RAG) ve Bedrock Flows/Agents şu an kullanılmıyor — ihtiyaç doğarsa (ör. şirket içi dokümana dayalı cevap) ayrı bir karar/sayfa olarak eklenir, bu sayfanın kapsamına şimdiden dahil edilmedi

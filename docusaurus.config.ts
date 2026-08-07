@@ -7,7 +7,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 const config: Config = {
   title: 'NewPortal Backend Docs',
   tagline: 'Mimari, kod yazma standartları ve API rehberleri',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/logo.png',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
@@ -68,6 +68,10 @@ const config: Config = {
     },
     navbar: {
       title: 'NewPortal Backend Docs',
+      logo: {
+        alt: 'NewPortal logo',
+        src: 'img/logo.png',
+      },
       items: [
         {
           type: 'docSidebar',
@@ -107,6 +111,10 @@ const config: Config = {
             {
               label: 'AWS',
               to: '/aws',
+            },
+            {
+              label: 'Entegrasyonlar',
+              to: '/integrations',
             },
           ],
         },

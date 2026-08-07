@@ -1,0 +1,212 @@
+---
+title: Sorgu Pipeline'ı
+sidebar_position: 5
+description: Niyet tespiti (mini LLM), SQL üretimi (ana LLM), Guard, şekil hesaplama ve UI seçimi — tam JSON akışı.
+wide_toc: true
+---
+
+import AiDarkCode from '@site/src/components/AiDarkCode';
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Sorgu Pipeline'ı
+
+[Akış](/ai/flow) sayfasındaki örnek, tek bir sabit fonksiyonla (`get_overdue_customers`) basitleştirilmiş bir anlatımdı. Gerçekte iki ayrı LLM çağrısı zincirlenir, her birinin **tek bir görevi** var — [llm_call_log](https://yusufkrnz.github.io/databaseschema/mongodb/llm-call-log)'daki `purpose` alanı bunları ayırt eder: `intent_detection`, `tool_call` (burada SQL üretimi), `ui_generation`. Bu sayfa, kataloğun LLM'e gidişinden ekrandaki nihai JSON'a kadar **her adımdaki gerçek veriyi** gösterir.
+
+## 1 — Niyet tespiti (mini LLM)
+
+Ucuz/hızlı bir model (ör. Haiku), kullanıcının mesajını okuyup **hangi tablo/alanların** ilgili olduğuna karar verir. LLM'e giden, gerçek şema değil — sadece tablo/alan **isimleri**:
+
+<CodeRail>
+  <AiDarkCode
+    label="Backend → Mini LLM"
+    value={{
+      user_message: 'Ödemesi geciken müşterileri göster',
+      available_tables: ['customers', 'invoices'],
+      available_fields: {
+        customers: ['id', 'name'],
+        invoices: ['customer_id', 'due_date', 'amount', 'paid_at'],
+      },
+    }}
+  />
+</CodeRail>
+
+<CodeRail>
+  <AiDarkCode
+    label="Mini LLM → Backend (tool_use, enum ile kısıtlı)"
+    value={{
+      tables: ['customers', 'invoices'],
+      intent: 'overdue_customers_report',
+    }}
+  />
+</CodeRail>
+
+`tables` alanı [registry](/ai/registry#katalogdan-native-tool-schemaya)'deki gibi `enum: available_tables` ile kısıtlanır — mini LLM, `available_tables` listesinde olmayan bir tablo ismi **üretemez**, API seviyesinde engellenir.
+
+## 2 — SQL üretimi (ana LLM)
+
+Ana LLM, sadece adım 1'de işaretlenen tabloların whitelist'lenmiş alan listesiyle SQL üretir:
+
+<CodeRail>
+  <AiDarkCode
+    label="Ana LLM → Backend (tool_use: generate_sql)"
+    value={{
+      sql: 'SELECT c.name, i.due_date, i.amount FROM customers c JOIN invoices i ON i.customer_id = c.id WHERE i.paid_at IS NULL AND i.due_date < NOW() - INTERVAL \'30 days\'',
+    }}
+  />
+</CodeRail>
+
+Bu SQL **doğrudan çalıştırılmaz**. [Güvenlik Modeli](/ai/security-model)'ndeki SQL Guard katmanından geçer:
+
+<CodeRail>
+  <CodeEditor
+    filename="services/sql_guard.py"
+    code={`def guard_and_run(raw_sql: str, tenant_id: str, allowed_tables: set[str]) -> list[dict]:
+    ast = parse_sql(raw_sql)
+
+    if ast.statement_type != "SELECT":
+        raise AuthorizationError(code="ai.sql_not_select")
+
+    if not ast.referenced_tables.issubset(allowed_tables):
+        raise AuthorizationError(code="ai.sql_table_not_allowed")
+
+    # LLM'in SQL'ine tenant_id filtresi için GÜVENİLMEZ — biz zorla ekliyoruz
+    safe_sql = inject_tenant_filter(ast, tenant_id=tenant_id)
+
+    return db.execute(safe_sql).fetchall()`}
+  />
+</CodeRail>
+
+`tenant_id` filtresi LLM'in yazdığı SQL'e **asla güvenilerek** eklenmez — LLM `WHERE` cümlesini unutsa, yanlış yazsa ya da bilerek atlasa bile bu satır backend tarafından deterministik olarak enjekte edilir.
+
+## 3 — Şekil hesaplama
+
+Guard'dan geçip çalıştırılan sorgunun sonucu backend'de kalır; LLM'e sadece şekli gider:
+
+<CodeRail>
+  <AiDarkCode
+    label="Backend → Ana LLM (tool_result: sadece şekil)"
+    value={{
+      row_count: 3,
+      columns: [
+        { name: 'Müşteri', type: 'string' },
+        { name: 'Gecikme (gün)', type: 'integer' },
+        { name: 'Risk Tutarı', type: 'currency' },
+      ],
+    }}
+  />
+</CodeRail>
+
+## 4 — UI seçimi (ana LLM, ikinci görev: `ui_generation`)
+
+Aynı ana LLM, şimdi farklı bir görevle (ikinci `purpose: ui_generation` çağrısı) tekrar devreye girer — gerçek veriyi hâlâ görmeden:
+
+<CodeRail>
+  <AiDarkCode
+    label="Ana LLM → Backend (tool_use: render_ui)"
+    value={{ component: 'DataTable', columns: ['Müşteri', 'Gecikme (gün)', 'Risk Tutarı'] }}
+  />
+</CodeRail>
+
+## 5 — Birleştirme (merge) → ekrandaki nihai JSON
+
+Backend, adım 2'de zaten elindeki gerçek satırları, adım 4'teki LLM kararına ekler — bu adımda LLM yok, sadece backend kodu:
+
+<CodeRail>
+  <CodeEditor
+    filename="services/render_service.py"
+    code={`def build_render_event(llm_decision: dict, real_rows: list[dict]) -> dict:
+    return {
+        "component": llm_decision["component"],
+        "props": {
+            "columns": llm_decision["columns"],
+            "rows": real_rows,  # adım 2'den — LLM bunu hiç görmedi
+        },
+    }`}
+  />
+</CodeRail>
+
+<CodeRail>
+  <AiDarkCode
+    label="Backend → Client (nihai render event)"
+    value={{
+      component: 'DataTable',
+      props: {
+        columns: ['Müşteri', 'Gecikme (gün)', 'Risk Tutarı'],
+        rows: [
+          { Müşteri: 'Akgün Ticaret', 'Gecikme (gün)': 46, 'Risk Tutarı': '₺28.400' },
+          { Müşteri: 'Deniz Yapı A.Ş.', 'Gecikme (gün)': 38, 'Risk Tutarı': '₺61.200' },
+          { Müşteri: 'Pınar Lojistik', 'Gecikme (gün)': 31, 'Risk Tutarı': '₺12.750' },
+        ],
+      },
+    }}
+  />
+</CodeRail>
+
+## 6 — Client'ta anlık render
+
+Client bu JSON'u aldığında yapması gereken tek şey: `component` alanındaki **isme** bakıp, önceden derlenmiş bir sözlükten (registry) gerçek React component'ini bulup `props` ile render etmek. Yeni kod çalıştırmaz, `eval` yapmaz, LLM'in yazdığı hiçbir şeyi DOM'a basmaz — sadece bir isim araması:
+
+<CodeRail>
+  <CodeEditor
+    filename="components/registry.ts"
+    code={`import DataTable from "./DataTable";
+import StatCard from "./StatCard";
+
+// Her ikisi de LLM'den ÖNCE, derleme zamanında yazılmış, sabit component'ler
+export const COMPONENT_REGISTRY = {
+  DataTable,
+  StatCard,
+};`}
+  />
+</CodeRail>
+
+<CodeRail>
+  <CodeEditor
+    filename="hooks/useAiRenderEvents.ts"
+    code={`import { COMPONENT_REGISTRY } from "../components/registry";
+
+function useAiRenderEvents(socket: WebSocket) {
+  const [elements, setElements] = useState<ReactNode[]>([]);
+
+  useEffect(() => {
+    socket.onmessage = (event) => {
+      const { component, props } = JSON.parse(event.data);
+
+      // İsim registry'de yoksa hiç render edilmez — sessizce yok sayılır
+      const Component = COMPONENT_REGISTRY[component];
+      if (!Component) return;
+
+      // Anlık render: yeni elemanı listeye ekle, React geri kalanını halleder
+      setElements((prev) => [...prev, <Component key={prev.length} {...props} />]);
+    };
+  }, [socket]);
+
+  return elements;
+}`}
+  />
+</CodeRail>
+
+"Anlık" (canlı) hissi buradan geliyor — backend her `render_event`'i ürettiği an WebSocket/SSE üzerinden gönderir, client de her mesajı aldığı anda ekrana ekler; kullanıcı LLM'in tüm cevabını beklemeden ilk tablo/kart göründüğü anı görür. `props` içindeki `rows`, adım 2'de DB'den gelen **gerçek** veridir — LLM bu satırı hiç üretmedi, backend'den client'a doğrudan aktı.
+
+:::info `render_event`'in client'a taşınması ayrı bir konu
+Yukarıdaki JSON'un client'a hangi protokolle (SSE, neden WebSocket değil) ulaştığı bu sayfanın konusu değil — bkz. [Gerçek Zamanlı Taşıma — SSE vs WebSocket](/guides/realtime-transport).
+:::
+
+## Tek cümlede LLM'e veri vermeden ekrana basma
+
+1. LLM'e sadece **isimler** gider (tablo/alan adları, tool adı, component adı) — hiçbir zaman değer
+2. LLM'den sadece **kararlar** döner (`{tables}`, `{sql}`, `{component, columns}`) — hiçbir zaman `rows`
+3. Gerçek veri, LLM'in iki kararı arasındaki boşlukta, **sadece backend'in elinde** taşınır (adım 2 → adım 5)
+4. Client, LLM'in yazdığı hiçbir kodu çalıştırmaz — sadece bir **isim** arar (`COMPONENT_REGISTRY[component]`) ve zaten var olan component'i gerçek veriyle render eder
+
+## Özet — hangi LLM çağrısı neyi görüyor
+
+| Çağrı | `purpose` | Girdi | Çıktı | Gerçek veri görür mü |
+|---|---|---|---|---|
+| 1. Mini LLM | `intent_detection` | Mesaj + tablo/alan isimleri | `{tables, intent}` | Hayır |
+| 2. Ana LLM | `tool_call` (SQL üretimi) | `intent` + whitelist'lenmiş alanlar | `{sql}` (Guard'dan geçmeden çalışmaz) | Hayır |
+| 3. Ana LLM | `ui_generation` | Sonucun **şekli** (row_count, columns) | `{component, columns}` | Hayır |
+| — | — | — | Backend'in merge'i | **Sadece backend** görür |
+
+Üç LLM çağrısının hiçbirinde gerçek satır verisi (`rows`) yer almaz — ne girdi olarak gönderilir ne çıktı olarak istenir. Veri, LLM'in konuşma geçmişine hiç girmeden, backend içinde adım 2'den adım 5'e taşınır.

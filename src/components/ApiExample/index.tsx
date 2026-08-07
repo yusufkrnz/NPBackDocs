@@ -7,7 +7,6 @@ type ApiExampleProps = {
   request?: unknown;
   requestHeaders?: Record<string, string>;
   response: unknown;
-  children: ReactNode;
 };
 
 function colorizeLine(line: string): ReactNode {
@@ -54,49 +53,37 @@ function CodeLines({ text }: { text: string }): ReactNode {
   );
 }
 
-export default function ApiExample({
-  method,
-  path,
-  request,
-  requestHeaders,
-  response,
-  children,
-}: ApiExampleProps): ReactNode {
+export default function ApiExample({ method, path, request, requestHeaders, response }: ApiExampleProps): ReactNode {
   return (
-    <div className={styles.wrapper}>
-      <div className={styles.left}>{children}</div>
-      <div className={styles.right}>
-        <div className={styles.card}>
-          <div className={styles.methodRow}>
-            <span className={`${styles.method} ${method === 'GET' ? styles.methodGet : styles.methodPost}`}>
-              {method}
-            </span>
-            <span className={styles.path}>{path}</span>
-          </div>
+    <div className={styles.card}>
+      <div className={styles.methodRow}>
+        <span className={`${styles.method} ${method === 'GET' ? styles.methodGet : styles.methodPost}`}>
+          {method}
+        </span>
+        <span className={styles.path}>{path}</span>
+      </div>
 
-          {(request || requestHeaders) && (
-            <div className={styles.section}>
-              <div className={styles.sectionLabel}>request</div>
-              {requestHeaders && (
-                <div className={styles.headers}>
-                  {Object.entries(requestHeaders).map(([k, v]) => (
-                    <div key={k}>
-                      <span className={styles.key}>{k}</span>: <span className={styles.string}>{v}</span>
-                    </div>
-                  ))}
+      {(request || requestHeaders) && (
+        <div className={styles.section}>
+          <div className={styles.sectionLabel}>request</div>
+          {requestHeaders && (
+            <div className={styles.headers}>
+              {Object.entries(requestHeaders).map(([k, v]) => (
+                <div key={k}>
+                  <span className={styles.key}>{k}</span>: <span className={styles.string}>{v}</span>
                 </div>
-              )}
-              {request ? <CodeLines text={JSON.stringify(request, null, 2)} /> : null}
+              ))}
             </div>
           )}
-
-          <div className={styles.divider} />
-
-          <div className={styles.section}>
-            <div className={styles.sectionLabel}>response</div>
-            <CodeLines text={JSON.stringify(response, null, 2)} />
-          </div>
+          {request ? <CodeLines text={JSON.stringify(request, null, 2)} /> : null}
         </div>
+      )}
+
+      <div className={styles.divider} />
+
+      <div className={styles.section}>
+        <div className={styles.sectionLabel}>response</div>
+        <CodeLines text={JSON.stringify(response, null, 2)} />
       </div>
     </div>
   );

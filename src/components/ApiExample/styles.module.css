@@ -1,36 +1,5 @@
-.wrapper {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 2.5rem;
-  margin: 2rem 0;
-  padding: 1.5rem;
-  border-radius: 16px;
-  background: var(--ifm-color-emphasis-100);
-}
-
-.left {
-  min-width: 0;
-  padding-top: 0.25rem;
-}
-
-.right {
-  min-width: 0;
-  align-self: start;
-  position: sticky;
-  top: 5rem;
-}
-
-@media (max-width: 900px) {
-  .wrapper {
-    grid-template-columns: 1fr;
-    padding: 1rem;
-  }
-  .right {
-    position: static;
-  }
-}
-
 .card {
+  margin: 0 0 1.5rem;
   border-radius: 14px;
   overflow: hidden;
   border: 1px solid #27272a;
@@ -92,8 +61,28 @@
 
 .codeLines {
   font-family: var(--ifm-font-family-monospace);
-  font-size: 0.82rem;
-  line-height: 1.85;
+  font-size: 0.7rem;
+  line-height: 1.55;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #52525b #0a0a0a;
+}
+
+.codeLines::-webkit-scrollbar {
+  height: 8px;
+}
+
+.codeLines::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+.codeLines::-webkit-scrollbar-thumb {
+  background: #52525b;
+  border-radius: 4px;
+}
+
+.codeLines::-webkit-scrollbar-thumb:hover {
+  background: #71717a;
 }
 
 .codeLine {
@@ -102,9 +91,9 @@
 
 .lineNumber {
   flex: 0 0 auto;
-  width: 2.25rem;
+  width: 1.6rem;
   text-align: right;
-  padding-right: 1rem;
+  padding-right: 0.6rem;
   color: #52525b;
   user-select: none;
 }
@@ -113,7 +102,7 @@
   flex: 1 1 auto;
   white-space: pre;
   color: #e4e4e7;
-  padding-right: 1.25rem;
+  padding-right: 1rem;
 }
 
 .key {
@@ -154,6 +143,35 @@
   font-family: var(--ifm-font-family-monospace);
   font-size: 0.82rem;
   color: #f4f4f5;
+}
+
+.cardPy {
+  border-left: 3px solid #3776ab;
+}
+
+.cardTs {
+  border-left: 3px solid #3178c6;
+  background: #0a0e16;
+}
+
+.langBadge {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-family: var(--ifm-font-family-monospace);
+}
+
+.langBadgePy {
+  color: #ffd43b;
+  background: rgba(55, 118, 171, 0.18);
+}
+
+.langBadgeTs {
+  color: #60a5fa;
+  background: rgba(49, 120, 198, 0.18);
 }
 
 .divider {

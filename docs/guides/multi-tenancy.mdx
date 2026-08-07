@@ -1,0 +1,35 @@
+---
+title: Multi-tenancy
+sidebar_position: 5
+description: Tenant izolasyon stratejisi — shared-schema + tenant_id, ve migration'ların bunu nasıl etkilediği.
+---
+
+# Multi-tenancy
+
+NewPortal her müşteriyi (şirketi) bir **tenant** olarak modelliyor. Bu sayfa, tenant'ların veritabanı seviyesinde nasıl izole edildiğini ve bunun migration stratejisini nasıl belirlediğini anlatır — tenant'ın kendisinin nasıl oluşturulduğu için bkz. [Kayıt olma](/use-cases/user-registration).
+
+## Seçilen model: shared-schema + `tenant_id`
+
+Üç yaygın izolasyon modeli var:
+
+| Model | İzolasyon | Migration maliyeti | Ne zaman tercih edilir |
+|---|---|---|---|
+| **Shared schema + `tenant_id`** (bizim seçimimiz) | Satır seviyesi | Tek migration, tüm tenant'lara aynı anda uygulanır | MVP, çoğu B2B SaaS — hız ve basitlik öncelikli |
+| Schema-per-tenant | Şema seviyesi | Migration her tenant şemasına ayrı ayrı çalıştırılmalı | Orta ölçek, tenant sayısı yönetilebilir kaldığı sürece |
+| Database-per-tenant | Tam izolasyon | Migration her DB'ye ayrı bağlanıp çalıştırılmalı | Büyük kurumsal/uyumluluk zorunluluğu olan müşteriler |
+
+MVP'de her tabloya bir `tenant_id` kolonu eklenir; izolasyon `WHERE tenant_id = ...` ile sağlanır. Bu filtre **asla** LLM'den, request body'sinden ya da URL parametresinden okunmaz — her zaman JWT'deki `sub`'dan çözülen kullanıcının `tenant_id`'si kullanılır (bkz. [Güvenlik Modeli](/ai/security-model)'ndeki aynı ilke, AI katmanı için de geçerli).
+
+## Migration'a etkisi
+
+Shared-schema seçimi, migration'ı önemli ölçüde basitleştirir: [Alembic](/guides/libraries) her yeni sürümde **tek bir migration seti** üretir, `alembic upgrade head` tüm tenant'lara aynı anda, tek komutla uygulanır. Schema-per-tenant veya database-per-tenant seçilseydi, her migration'ın kaç tenant varsa o kadar kez (script döngüsüyle) çalıştırılması gerekirdi — tenant sayısı arttıkça bu operasyonel yük doğrusal büyür.
+
+## Büyük müşteri ihtiyacı doğarsa
+
+"Şirket büyüklüğüne göre" farklı bir izolasyon seviyesi gerekirse (ör. büyük bir kurumsal müşteri kendi DB'sini istiyor), bu **tüm sistemi** schema-per-tenant'a geçirmek anlamına gelmez — sadece o tek tenant için ayrı bir bağlantı/routing katmanı eklenir, geri kalan tenant'lar shared-schema'da kalmaya devam eder. Bu senaryo şu an karşılaşılmadığı için tasarlanmadı, sadece mimarinin buna kapalı olmadığı belirtiliyor.
+
+## İlgili sayfalar
+
+- [Kayıt olma](/use-cases/user-registration) — tenant'ın ilk oluşturulduğu an
+- [Ekip Daveti](/use-cases/team-invitation) — var olan bir tenant'a yeni kullanıcı ekleme
+- [Tenant Service](/services/tenant-service) — tenant/davet endpoint referansı

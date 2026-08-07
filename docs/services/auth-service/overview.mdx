@@ -11,6 +11,18 @@ description: Auth Service'in sorumluluğu, bağımlılıkları ve endpoint'leri.
 
 Kullanıcı kaydı, login, access/refresh token yaşam döngüsü ve logout. **Yetkilendirme** (rol/izin kontrolü) bu servisin kapsamında değil — Auth Service sadece "bu kullanıcı kim" sorusuna cevap verir.
 
+### Authentication vs Authorization — üç katman
+
+Bu ikisi sık karıştırılıyor, üçe ayırmak netleştirir:
+
+| Katman | Soru | Durum |
+|---|---|---|
+| **Authentication** | Bu kullanıcı kim? | Bu servisin işi — login, token, doğrulama, sıfırlama hepsi burada |
+| **Kaynak sahipliği** | Bu veri, bu kullanıcıya mı ait? | Zaten var, ama isimsiz — [`get_current_user_id`](/services/auth-service/token-design)'in döndürdüğü `sub`, ör. [`/users/me`](/services/auth-service/profile)'de "hangi kaydı göstereceğim" sorusunu cevaplar. Kullanıcı başkasının verisini isteyemez çünkü token'daki id dışında bir id hiç sorgulanmaz. |
+| **Rol/izin bazlı yetkilendirme (RBAC)** | Bu kullanıcının bu eylemi yapma **yetkisi** var mı? | **Yok** — bilerek ertelendi. "Admin mi, değil mi", "bu kaydı düzenleyebilir mi" gibi sorular henüz hiçbir yerde cevaplanmıyor; ihtiyaç doğduğunda ayrı bir karar/sayfa olarak eklenir. |
+
+Kısacası: "sen kimsin" ve "bu senin verin mi" cevaplanmış durumda; "senin bu yetkin var mı" sorusu henüz sistemde yok.
+
 ## Bağımlılıklar
 
 - `Users`, `RefreshTokens` tabloları (bu servis sahibi — şema için bkz. database schema dokümanı)
@@ -23,7 +35,7 @@ Diğer tüm servisler dolaylı bağımlıdır: korumalı bir endpoint'e gelen he
 
 | Method | Path | Açıklama | Detay |
 |---|---|---|---|
-| <span className="badge badge--success">POST</span> | `/auth/register` | Yeni kullanıcı oluşturur | [login-and-token-issuance](/use-cases/login-and-token-issuance) |
+| <span className="badge badge--success">POST</span> | `/auth/register` | Yeni kullanıcı oluşturur | [Kayıt olma](/use-cases/user-registration) |
 | <span className="badge badge--success">POST</span> | `/auth/login` | E-posta + şifre ile giriş, access + refresh token döner | [login-and-token-issuance](/use-cases/login-and-token-issuance) |
 | <span className="badge badge--success">POST</span> | `/auth/refresh` | Geçerli bir refresh token ile yeni access token üretir | [Token Design](/services/auth-service/token-design) |
 | <span className="badge badge--success">POST</span> | `/auth/logout` | Refresh token'ı iptal eder | [Token Design](/services/auth-service/token-design) |

@@ -2,14 +2,17 @@
 title: Akış
 sidebar_position: 4
 description: Kullanıcı mesajından ekrana dinamik UI basılmasına kadar olan adım adım akış.
+wide_toc: true
 ---
 
 import AiCatalogBoxes from '@site/src/components/AiCatalogBoxes';
 import AiFlowPipeline from '@site/src/components/AiFlowPipeline';
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
 
 # Akış
 
-Bu sayfa tek bir somut örnek üzerinden gidiyor: kullanıcı "**Ödemesi geciken müşterileri göster**" yazıyor. Bu örneği bilerek CRM (müşteri) ve ERP (tahsilat/cari) verisini birlikte gerektiren bir soru olarak seçtik — NewPortal'ın AI katmanının asıl değeri, tek başına bir modülde değil, modüller arası birleşik sorgularda ortaya çıkıyor. Aşağıdaki diyagram, mesajın uçtan uca hangi bileşenler arasında hangi sırayla dolaştığını **tek bakışta** gösteriyor.
+Bu sayfa tek bir somut örnek üzerinden gidiyor: kullanıcı "**Ödemesi geciken müşterileri göster**" yazıyor. Bu örneği bilerek CRM (müşteri) ve ERP (tahsilat/cari) verisini birlikte gerektiren bir soru olarak seçtik — NewPortal'ın AI katmanının asıl değeri, tek başına bir modülde değil, modüller arası birleşik sorgularda ortaya çıkıyor. Aşağıdaki diyagram, mesajın uçtan uca hangi bileşenler arasında hangi sırayla dolaştığını **tek bakışta** gösteriyor. Burada tek bir sabit fonksiyon (`get_overdue_customers`) üzerinden basitleştirilmiş anlatılıyor — mini LLM'in niyet tespiti, ana LLM'in SQL üretmesi ve client'ın anlık render etmesi dahil tam pipeline için bkz. [Sorgu Pipeline'ı](/ai/query-pipeline).
 
 ```mermaid
 sequenceDiagram
@@ -63,6 +66,46 @@ LLM'in gönderdiği tek şey adım 7'deki birkaç baytlık JSON: `{"component": 
 İleri/geri gezilen bir carousel değil — Tool Catalog ve UI Catalog'un Backend'e, Backend'in LLM'e nasıl bağlı olduğu ve her turdaki **gerçek giden/gelen JSON**'lar, tek kaydırmada, yukarıdan aşağıya:
 
 <AiFlowPipeline />
+
+## LLM'in kararıyla gerçek veriyi nasıl birleştiriyoruz
+
+Yukarıdaki pipeline'ın son adımında "Backend gerçek veriyi ekler" yazıyor — bunun gerçek kodu şu:
+
+<CodeRail>
+  <CodeEditor
+    filename="services/render_service.py"
+    code={`def build_render_event(llm_decision: dict, real_rows: list[dict]) -> dict:
+    # llm_decision = {"component": "DataTable", "columns": ["Müşteri", "Gecikme (gün)", "Risk Tutarı"]}
+    # LLM'in kararında "rows" hiç yok — şema buna izin vermiyor (bkz. JSON Schema)
+    return {
+        "component": llm_decision["component"],
+        "props": {
+            "columns": llm_decision["columns"],
+            "rows": real_rows,  # LLM'in hiç görmediği, DB'den gelen gerçek satırlar
+        },
+    }`}
+  />
+</CodeRail>
+
+`real_rows`, adım 5'te (whitelist + gerçek sorgu) zaten backend'in elinde — LLM'e hiç gönderilmedi, sadece bekletildi. Bu fonksiyonun çağrıldığı yer, akışın tamamını tek bakışta özetler:
+
+<CodeRail>
+  <CodeEditor
+    filename="routers/chat.py"
+    code={`# Adım 5: gerçek veri, LLM'e hiç gitmeden, doğrudan DB'den çekilir
+tool_result = await run_tool("get_overdue_customers", {"min_days_overdue": 30})
+
+# Adım 6-7: LLM'e sadece ŞEKİL gönderilir, LLM component+columns seçer
+llm_decision = await ask_llm_to_choose_component(shape_of(tool_result))
+
+# Adım 9: gerçek veri + LLM'in kararı burada birleştirilir — LLM bu adımı hiç görmez
+render_event = build_render_event(llm_decision, real_rows=tool_result["rows"])
+
+await send_to_client(render_event)  # Adım 10`}
+  />
+</CodeRail>
+
+LLM'in tek katkısı `component` ve `columns` seçmek; `rows`'u LLM ne üretiyor ne de görüyor — "veriyi taşıma" işi tamamen bu iki fonksiyonun elinde, LLM'in konuşma geçmişine hiç girmiyor.
 
 <details>
 <summary>Katalog girdilerinin tam şeması (referans)</summary>

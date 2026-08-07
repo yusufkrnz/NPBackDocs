@@ -2,28 +2,30 @@
 title: Profil
 sidebar_position: 5
 description: Giriş yapmış kullanıcının kendi profil bilgilerini görmesi.
+wide_toc: true
 ---
 
 import ApiExample from '@site/src/components/ApiExample';
+import CodeRail from '@site/src/components/CodeRail';
+
+<CodeRail>
+  <ApiExample
+    method="GET"
+    path="/users/me"
+    requestHeaders={{ Authorization: 'Bearer <access_token>' }}
+    response={{
+      id: 'usr_8f2a1c',
+      email: 'ayse@firma.com',
+      full_name: 'Ayşe Yılmaz',
+      is_active: true,
+      created_at: '2026-01-14T09:12:00Z',
+    }}
+  />
+</CodeRail>
 
 # Profil
 
-<ApiExample
-  method="GET"
-  path="/users/me"
-  requestHeaders={{ Authorization: 'Bearer <access_token>' }}
-  response={{
-    id: 'usr_8f2a1c',
-    email: 'ayse@firma.com',
-    full_name: 'Ayşe Yılmaz',
-    is_active: true,
-    created_at: '2026-01-14T09:12:00Z',
-  }}
->
-
 Access token'daki `sub` (`user_id`) üzerinden korumalı bir şekilde çağrılır — [Token Design](/services/auth-service/token-design)'daki `get_current_user_id` dependency'si ile.
-
-</ApiExample>
 
 ## Notlar
 
