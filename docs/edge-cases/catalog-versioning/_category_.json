@@ -1,0 +1,9 @@
+{
+  "label": "Catalog Versiyonlama",
+  "position": 7,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases/catalog-versioning",
+    "description": "Persist edilmiş render ağaçlarının frontend component/kütüphane sürümüyle uyumsuz kalmasıyla ilgili uç durumlar."
+  }
+}

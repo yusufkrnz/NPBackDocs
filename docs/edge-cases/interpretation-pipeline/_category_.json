@@ -1,0 +1,9 @@
+{
+  "label": "Interpretation Pipeline",
+  "position": 6,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases/interpretation-pipeline",
+    "description": "\"Bu veriyi yorumla\" tipi isteklerde PII ve prompt injection ile ilgili uç durumlar."
+  }
+}

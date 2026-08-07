@@ -1,0 +1,9 @@
+{
+  "label": "Catalog / Retrieval",
+  "position": 8,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases/catalog-retrieval",
+    "description": "Tenant/entegrasyon sayısı büyüdükçe kataloğun (tablo/alan/component) LLM'e nasıl taşındığıyla ilgili uç durumlar — cache, embedding, retrieval."
+  }
+}

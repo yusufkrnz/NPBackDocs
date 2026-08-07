@@ -1,7 +1,7 @@
 ---
 title: Genel Bakış
 sidebar_position: 1
-description: Edge case dokümantasyon formatı ve neden bu bölüm ayrı tutuluyor.
+description: Edge case dokümantasyon formatı ve konu bazlı gruplama.
 ---
 
 # Edge Case'ler
@@ -10,17 +10,18 @@ Bu bölüm, koda bakarak bulunmuş ama **henüz çözülmemiş** uç durumları 
 
 ## Format
 
-Her case aşağıdaki 4 alanla yazılır:
+Her case: kısa bir **Risk** cümlesi + sorunu tetikleyen kodun, sorunlu satırı kırmızı vurgulanmış hâli. "Çözüldü" olduğunda o case'in üstüne not düşülür.
 
-- **Açıklama** — sorunun teknik olarak ne olduğu
-- **Risk Seviyesi** — Düşük / Orta / Yüksek
-- **Örnek Senaryo** — sorunu tetikleyen somut bir girdi/durum
-- **Çözüm** — çözülene kadar boş bırakılır; çözüldüğünde bu alan doldurulur ve case sayfada "çözüldü" olarak işaretlenir
+## Konu bazlı gruplama
 
-## Sayfalar
+Case'ler tek bir uzun liste değil, **tema bazlı klasörlerde** tutuluyor — aynı temaya yeni bir case geldiğinde yeni bir sayfa açmak yerine ilgili klasördeki dosyaya eklenir:
 
-- [render_service.py — build_render_event](/edge-cases/render-service) — EDGE-CASE-001 → 010
-- [Conversation / Memory Yönetimi](/edge-cases/conversation-memory) — EDGE-CASE-011 → 014
-- [Tenant / RLS İzolasyonu](/edge-cases/tenant-isolation) — EDGE-CASE-015, 019
-- [Yorumlama (Interpretation) Pipeline'ı](/edge-cases/interpretation-pipeline) — EDGE-CASE-016, 017
-- [Catalog / Component Versiyonlama](/edge-cases/catalog-versioning) — EDGE-CASE-018
+- [render_service.py](/edge-cases/render-service) — EDGE-CASE-001 → 010 (whitelist, tip, component doğrulama)
+- [Context Management](/edge-cases/context-management) — EDGE-CASE-011, 020, 021 (sliding window, narrative/handoff, proaktif rotasyon)
+- [MongoDB](/edge-cases/mongodb) — EDGE-CASE-012, 013 (doküman boyutu, TTL)
+- [Tenant / RLS İzolasyonu](/edge-cases/tenant-isolation) — EDGE-CASE-014, 015, 019, 023 (session, row-level, guard sırası, retrieval sızıntısı)
+- [Interpretation Pipeline](/edge-cases/interpretation-pipeline) — EDGE-CASE-016, 017 (PII, anonimleştirme)
+- [Catalog Versiyonlama](/edge-cases/catalog-versioning) — EDGE-CASE-018
+- [Catalog / Retrieval](/edge-cases/catalog-retrieval) — EDGE-CASE-022, 024, 025, 026 (cache, embedding, boş/düşük güvenilirlikli sonuç)
+
+Yeni bir konu (örn. "Rate Limiting") ortaya çıkarsa, aynı düzende yeni bir klasör (`docs/edge-cases/rate-limiting/`) açılır.

@@ -1,0 +1,9 @@
+{
+  "label": "render_service.py",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases/render-service",
+    "description": "build_render_event fonksiyonundaki whitelist/tip/component doğrulama eksikleri."
+  }
+}

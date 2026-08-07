@@ -1,0 +1,88 @@
+---
+title: Ölçeklenme (Cache, Embedding, Boş Sonuç)
+sidebar_position: 1
+description: Kataloğun tenant/entegrasyon sayısı büyüdükçe cache'lenmemesi, embedding'in güncel kalmaması, boş ve düşük güvenilirlikli retrieval sonucuyla ilgili 4 uç durum — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Ölçeklenme (Cache, Embedding, Boş Sonuç)
+
+SaaS büyüdükçe (yeni tenant, yeni ERP/CRM entegrasyonu) katalog (tablo/alan/component tanımları) da büyüyor. "Hepsini her seferinde gönder" yaklaşımı burada kırılıyor — çözüm embedding-based retrieval (bkz. yukarıki tartışma), ama bu çözümün kendi uç durumları var.
+
+## EDGE-CASE-022: Statik Katalog Cache'siz, Her Turn'de Tam Gönderiliyor
+
+**Risk: Yüksek.** Tam katalog (tüm tablo/alan/component tanımları) her istekte prompt'a ekleniyor, `cache_control` olmadan. Anthropic'in kendi verisine göre tool/katalog metadata'sı context'in %40'ına kadar çıkabiliyor — tenant başına entegrasyon sayısı arttıkça bu maliyet lineer büyür, cache'lenmediği için her istek tam fiyatını öder.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[4, 7]}
+  code={`# Her istekte TAM katalog gönderiliyor, cache_control yok
+messages = [{
+    "role": "system",
+    "content": FULL_UI_CATALOG + FULL_TABLE_SCHEMA,  # 200+ tablo, 500+ alan
+}]
+# cache_control: ephemeral eklenmemiş
+# -> her istek katalog boyutu kadar TAM fiyat öder, tenant/entegrasyon arttıkça maliyet lineer büyür`}
+/>
+
+## EDGE-CASE-024: Embedding Güncellenmezse Yeni Alan/Tablo Retrieval'a Hiç Girmez
+
+**Risk: Orta.** Kataloğa yeni bir tablo/alan eklenirken `embedding` alanı hesaplanıp yazılmazsa, semantik arama o kaydı asla en-alakalı `top_k` içine sokmaz — kayıt whitelist'te olsa bile LLM'e hiç görünmez. "Neden LLM bu tabloyu hiç seçmiyor" diye anlaşılması zor, sessiz bir hata.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[5, 8]}
+  code={`await db.catalog.insert_one({
+    "tenant_id": tenant_id,
+    "table": "refunds",
+    "fields": [...],
+    # "embedding" alanı hiç hesaplanıp eklenmemiş
+})
+# $vectorSearch, embedding'i olmayan/eksik dokümanı adaylar arasına hiç almaz
+# "İade" ile ilgili bir soru sorulduğunda "refunds" tablosu asla önerilmez`}
+/>
+
+## EDGE-CASE-025: Boş Retrieval Sonucu Ele Alınmazsa Mini LLM Halüsinasyon Yapabilir
+
+**Risk: Orta.** Kullanıcının sorusu kataloğun hiçbir parçasına semantik olarak yakın değilse, `retrieve_relevant_catalog` boş liste dönebilir. Bu durum ele alınmazsa mini LLM'e boş bir `candidate_tables` listesi gider — LLM ya hata verir ya da olmayan bir tabloyu "seçer".
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[2, 8]}
+  code={`candidates = await retrieve_relevant_catalog(user_message, tenant_id, top_k=15)
+# candidates = [] — hiçbir eşleşme yok, ele alınmıyor
+selected = await mini_llm_select_tables(
+    user_message=user_message,
+    candidate_tables=[],          # boş liste LLM'e gidiyor
+    candidate_fields={},
+)
+# LLM boş seçenek karşısında halüsinasyon yapıp olmayan bir tablo "seçebilir"`}
+/>
+
+## EDGE-CASE-026: Düşük Güvenilirlikli Retrieval Sonucu Netleştirme Olmadan Kullanılırsa Yanlış Tabloya Kilitlenme
+
+**Risk: Orta-Yüksek.** EDGE-CASE-025'ten farklı: burada `retrieve_relevant_catalog` **boş dönmüyor** — `top_k` dolu, ama en iyi eşleşmelerin benzerlik skorları da düşük (örn. hepsi 0.3'ün altında). Bu, kullanıcının mesajı çok dağınık, çok konulu ya da yazım hatalarıyla dolu olduğunda olur — embedding subword-token benzerliğiyle typo'lara zaten dayanıklıdır, ama mesaj gerçekten kataloğun **hiçbir** parçasına anlamca yakın değilse (yeni/nadir bir konu, ya da tek mesajda 3-4 farklı isteğin üst üste bindiği bir cümle), en yakın 15 sonuç bile zayıf kalır.
+
+Sorun, bu düşük skorun bir **sinyal** olarak hiç kullanılmaması: sistem "adaylar var" diye bunları sanki güvenilirmiş gibi doğrudan mini LLM'e geçirir. Mini LLM'in ise "hiçbiri uymuyor" deme seçeneği yoktur — zorunlu olarak bu 15 zayıf aday arasından "en az kötü" olanı seçer. Sonuç: kullanıcı "anlamadım, şunu mu demek istediniz?" gibi dürüst bir netleştirme sorusu yerine, **yanlış bir tabloya dayanan, kendinden emin görünen ama içerik olarak alakasız bir cevap** alır — bu, boş sonuçtan (EDGE-CASE-025) daha tehlikelidir çünkü hata görünmez, sessizce yanlış bilgi üretilir.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[6, 13]}
+  code={`# Kullanıcı mesajı: "bu ayki satışları göster ama aslında önce geçen ayla
+# karşılaştır da olur, bir de departman bazlı kırılım istiyorum aslında" (dağınık, çok-niyetli)
+
+candidates = await retrieve_relevant_catalog(user_message, tenant_id, top_k=15)
+scores = [c["score"] for c in candidates]
+# En iyi skor bile düşük olabilir (örn. max(scores) == 0.28) — HİÇ KONTROL EDİLMİYOR
+# CONFIDENCE_THRESHOLD gibi bir eşik yok, "belirsiz" durumu ayırt edilmiyor
+
+selected = await mini_llm_select_tables(
+    user_message=user_message,
+    candidate_tables=[c["table"] for c in candidates],  # zayıf adaylar aynen geçiyor
+)
+# Mini LLM'in "hiçbiri uymuyor" deme seçeneği yok — zorunlu olarak
+# bu 15 zayıf aday arasından "en yakın" birini seçer
+# -> yanlış tabloya kilitlenir, kullanıcı "emin değilim" yerine
+#    kendinden emin görünen YANLIŞ bir cevap alır`}
+/>

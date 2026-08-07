@@ -1,0 +1,9 @@
+{
+  "label": "Context Management",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases/context-management",
+    "description": "Sohbet geçmişinin LLM'e giden context'e nasıl taşındığıyla ilgili uç durumlar — sliding window, narrative/handoff, proaktif rotasyon."
+  }
+}

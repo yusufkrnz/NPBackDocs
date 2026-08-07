@@ -1,0 +1,9 @@
+{
+  "label": "MongoDB",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases/mongodb",
+    "description": "MongoDB'de büyük/geçici verinin nasıl saklandığıyla ilgili uç durumlar — ileride Mongo'ya dair başka case'ler de buraya eklenir."
+  }
+}

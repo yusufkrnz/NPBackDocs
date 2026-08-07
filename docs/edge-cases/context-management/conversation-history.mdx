@@ -1,0 +1,57 @@
+---
+title: Conversation History
+sidebar_position: 1
+description: Sohbet geçmişinin context'e sınırsız taşınması, özet/handoff mekanizmasının ve iki eşikli rotasyonun olmaması — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Conversation History
+
+Bedrock (ve genel olarak LLM API'ları) konuşma geçmişini kendisi tutmuyor — backend her turn'de geçmişi kendisi taşımak zorunda. `real_rows` zaten LLM'e hiç gitmediği için (bkz. [Sorgu Pipeline'ı](/ai/query-pipeline)) context şişmesi riskimiz çoğu ajana göre yapısal olarak düşük — ama aşağıdaki 3 case hâlâ açık.
+
+## EDGE-CASE-011: Conversation History Sınırsız Büyüyor
+
+**Risk: Yüksek.** Turn'ler (`user_message` + `llm_decisions`) hiçbir sliding-window veya özetleme olmadan birikiyor. Uzun bir sohbette her LLM çağrısına **tüm geçmiş** ekleniyor — hem maliyet katlanarak artar hem de bir noktada modelin context limiti aşılır.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[3, 7]}
+  code={`# routers/chat.py — hiç sliding window/özet yok
+context = []
+for t in conversation.turns:                     # TÜM geçmiş, sınır yok
+    context.append({"role": "user", "content": t.user_message})
+    context.append({"role": "assistant", "content": json.dumps(t.llm_decisions)})
+
+llm_response = await ask_llm(context=context)     # 50. turn'de context limiti aşılır`}
+/>
+
+## EDGE-CASE-020: Narrative/Handoff Mekanizması Yok
+
+**Risk: Orta-Yüksek.** Sliding window'un dışına düşen eski turn'ler hakkında hiçbir özet (narrative) tutulmuyor — pencerenin dışına düşen bir karar (örn. kullanıcının daha önce "sadece Muhasebe departmanını göster" demiş olması) LLM'in "hafızasından" tamamen kaybolur. Anthropic'in `claude-progress.txt` pattern'indeki gibi "buraya kadar ne konuşuldu" özetleyen bir alan yok.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[2, 4]}
+  code={`# conversation modelinde narrative/summary alanı YOK
+context = build_llm_context(conversation.turns[-5:])   # sadece son 5 turn, ham
+# 6. turn'den eskideki "sadece Muhasebe departmanını göster" kararı
+# context'e hiç girmiyor, LLM bunu unutmuş gibi davranır
+llm_response = await ask_llm(context=context)`}
+/>
+
+## EDGE-CASE-021: Tek Eşikli Rotasyon — Özetleme ile Session Bitirme Yarışır
+
+**Risk: Orta.** Context doluluk kontrolü tek bir eşikte yapılırsa (örn. sadece %80'de), özetleme/senkronizasyon ile session'ı sonlandırma aynı anda tetiklenebilir — özetleme işlemi context'in kendisini tüketirken yarıda kalabilir (race condition). İki aşamalı eşik (örn. %65 erken uyarı, %80 rotasyon) olmadan bu risk var.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[1, 6]}
+  code={`USAGE_THRESHOLD = 0.80   # TEK eşik
+
+if context_usage(conv) > USAGE_THRESHOLD:
+    sync_narrative(conv)      # özet yazmaya başlar
+    rotate_conversation(conv) # AYNI ANDA session'ı da bitirir
+# sync_narrative henüz tamamlanmadan rotate_conversation devreye girerse
+# özet yarım/eksik kalır, bir sonraki turn eksik bağlamla başlar`}
+/>

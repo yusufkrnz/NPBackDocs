@@ -1,0 +1,81 @@
+---
+title: Genel Bakış
+sidebar_position: 1
+description: Guard zincirinde tenant, kullanıcı, session ve retrieval bazlı izolasyonla ilgili tespit edilen 4 uç durum — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Tenant / RLS İzolasyonu
+
+`guard_and_run` şu anki haliyle sadece `tenant_id` filtresi enjekte ediyor. Aşağıdaki 4 case, tenant izolasyonu ile kullanıcı/session/retrieval izolasyonunun **aynı şey olmadığını** gösteriyor. OpenHands gibi olgun agent framework'lerinin bile "multi-tenant security audit'i ileride yaparız" deyip ihmal ettiği tam bu alan — ilk günden zorunlu tutulmalı.
+
+## EDGE-CASE-014: `conversation_id` ↔ `user_id` Çapraz Kontrolü Yok (IDOR)
+
+**Risk: Yüksek (yetkisiz erişim).** Bir sohbet okunurken `conversation_id`'nin gerçekten istek atan kullanıcıya ait olduğu doğrulanmazsa, başka bir kullanıcının `conversation_id`'sini bilen/tahmin eden herkes o sohbetin tüm geçmişini okuyabilir — klasik IDOR.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[3, 4]}
+  code={`@router.post("/ai/chat")
+async def chat(req: ChatRequest, user=Depends(get_current_user)):
+    conv = await db.conversations.find_one({"_id": req.conversation_id})
+    # user.id ile conv["user_id"] HİÇ karşılaştırılmıyor
+    turns = conv["turns"]
+    # Başka bir kullanıcının conversation_id'sini bilen herkes
+    # o sohbetin tüm geçmişini okuyabilir`}
+/>
+
+## EDGE-CASE-015: Tenant Filtresi Var, Kullanıcı Bazlı (Row-Level) Yetki Yok
+
+**Risk: Yüksek.** Aynı tenant içindeki farklı kullanıcıların (örn. normal çalışan vs yönetici) görmemesi gereken satırlara (maaş, kişisel masraf) erişimini engelleyecek bir Row-Level Security katmanı yok — sadece tenant'lar birbirinden izole, aynı tenant içindeki kullanıcılar değil.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[4, 7]}
+  code={`def guard_and_run(raw_sql, tenant_id, allowed_tables):
+    ast = parse_sql(raw_sql)
+    safe_sql = inject_tenant_filter(ast, tenant_id=tenant_id)
+    # user_id bazlı satır filtresi YOK
+    return db.execute(safe_sql).fetchall()
+    # Aynı tenant'taki normal çalışan, yöneticinin maaş/masraf
+    # satırlarını da görebilir — sadece tenant izole edildi, kullanıcı değil`}
+/>
+
+## EDGE-CASE-019: Guard Sırası Bozulursa RLS Set Edilmeden Sorgu Çalışır
+
+**Risk: Yüksek.** Guard zinciri sabit sırayla çalışmak zorunda (`tenant_guard` → `rls_guard` → `sql_guard`). Sıra bozulur ve sorgu, Postgres session değişkeni (`app.current_tenant`) set edilmeden çalıştırılırsa, RLS policy `current_setting()` için `NULL` görür — policy `fail-open` yazılmışsa (yanlışlıkla) **tüm tenant'ların** satırları dönebilir.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[2, 7]}
+  code={`async def run_guards(ctx):
+    ctx = await sql_guard(ctx)      # SIRA YANLIŞ — RLS'ten ÖNCE çalışıyor
+    ctx = await rls_guard(ctx)      # SET app.current_tenant burada yapılıyor
+    return ctx
+# sql_guard içindeki db.execute, RLS session variable'ı set edilmeden önce çalışır
+# Postgres current_setting('app.current_tenant') NULL döner
+# Policy fail-open yazılmışsa: TÜM tenant'ların satırları döner`}
+/>
+
+## EDGE-CASE-023: Retrieval'da Tenant Filtresi Vector Search'ten Sonra Uygulanırsa Kataloglar Arası Sızıntı
+
+**Risk: Yüksek (kritik güvenlik).** Katalog büyüdükçe eklenen embedding-based retrieval katmanında `tenant_id` filtresi `$vectorSearch`'ün kendi `filter` parametresiyle değil, aramadan **sonra** ayrı bir `$match` ile uygulanırsa, `numCandidates` içindeki tarama başka tenant'ların kayıtlarını da kapsamış olur — yanlış konfigürasyonda başka bir tenant'ın tablo/alan şeması (isim seviyesinde) sızabilir.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[8, 13]}
+  code={`results = await db.catalog.aggregate([
+    {"$vectorSearch": {
+        "index": "catalog_embedding_idx",
+        "queryVector": query_embedding,
+        "path": "embedding",
+        "numCandidates": 100,
+        "limit": top_k,
+        # "filter": {"tenant_id": tenant_id} EKSİK — vectorSearch'ün kendi filtresi kullanılmamış
+    }},
+    {"$match": {"tenant_id": tenant_id}},  # filtre SONRADAN uygulanıyor
+]).to_list(top_k)
+# numCandidates=100 içinde başka tenant'ların kayıtları da taranmış oluyor
+# top_k=15 sonuç azalabilir/boşalabilir, ya da hata/log satırlarına başka tenant'ın şema bilgisi sızabilir`}
+/>

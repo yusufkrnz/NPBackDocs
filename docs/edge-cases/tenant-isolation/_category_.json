@@ -1,0 +1,9 @@
+{
+  "label": "Tenant / RLS İzolasyonu",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases/tenant-isolation",
+    "description": "Tenant, kullanıcı ve session bazlı izolasyon katmanlarındaki uç durumlar."
+  }
+}
