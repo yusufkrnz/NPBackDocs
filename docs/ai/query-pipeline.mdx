@@ -108,6 +108,10 @@ Aynı ana LLM, şimdi farklı bir görevle (ikinci `purpose: ui_generation` ça�
   />
 </CodeRail>
 
+:::info Bu basitleştirilmiş, gerçekte LLM bir ağaç üretiyor
+Yukarıdaki `{component, columns}` tek bir bileşen için basitleştirilmiş bir örnek. Gerçekte `render_ui` bir **ağaç** (`UINode`: `type` + `props` + `children`) döndürüyor — `Row`/`Grid`/`Column` gibi container'lar `children` kabul ediyor, "yan yana göster" ya da "kendi dashboard'unu kur" gibi istekler yeni kod yazmadan bu ağaçla karşılanıyor. Her node, catalog'daki Pydantic şemasına karşı doğrulanıyor; `props` içindeki veri de gerçek değer değil `{"$state": "/path"}` referansı — gerçek satırlar merge adımında (adım 5) bu path'e bağlanıyor. UI component kataloğunun (bu ağacın hangi node tiplerini tanıdığı) nasıl cache'lendiği için bkz. [Prompt Caching](/cost-management/prompt-caching).
+:::
+
 ## 5 — Birleştirme (merge) → ekrandaki nihai JSON
 
 Backend, adım 2'de zaten elindeki gerçek satırları, adım 4'teki LLM kararına ekler — bu adımda LLM yok, sadece backend kodu:

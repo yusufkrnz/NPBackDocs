@@ -1,0 +1,99 @@
+---
+title: Dinamik UI'ın Kalıcılığı
+sidebar_position: 10
+description: Sohbet içi bir widget ile kullanıcının kurduğu kalıcı bir dashboard farklı şeyler — ikisi de nasıl saklanıyor, gerçek şemamızdan ve sektör pattern'lerinden.
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Dinamik UI'ın Kalıcılığı
+
+[UI Ağacı](/ai/ui-tree)'nda LLM'in bir `UINode` ağacı ürettiğini gördük. Bu sayfa, o ağacın **nereye, ne kadar süreliğine** yazıldığını anlatıyor — çünkü iki farklı ihtiyaç var ve ikisinin kalıcılık şekli birbirinden tamamen farklı:
+
+1. **Sohbet içi anlık widget** — kullanıcı bir şey sordu, cevap bir tablo/grafik oldu, bu o mesajın bir parçası.
+2. **Kişiselleştirilmiş, kalıcı dashboard** — kullanıcının ayrıca kurup tekrar tekrar açtığı, oturumdan bağımsız yaşayan bir yapı.
+
+## 1 — Sohbet içi widget: gerçek şemamızda zaten çözülü
+
+[Konuşma Bağlamı ve Token Bütçesi](/ai/conversation-context) sayfasında geçen `ai_message_buckets` koleksiyonu, her asistan mesajının `tool_calls[]` ve `ui_widgets[]` alanlarını **doğrudan mesajın içinde** taşıyor (bkz. [ai_message_buckets](https://yusufkrnz.github.io/databaseschema/mongodb/ai-message-buckets)):
+
+```json
+{
+  "sender_type": "assistant",
+  "tool_calls": [
+    { "tool_name": "get_deals", "input_params": { "status": "won", "month": "2026-08" },
+      "output_result": { "count": 7, "total_amount": 412500 } }
+  ],
+  "ui_widgets": [
+    { "widget_type": "deal_table", "widget_payload": { "columns": ["title", "amount", "owner"], "row_count": 7 } }
+  ]
+}
+```
+
+### Kritik detay — `widget_payload` gerçek satırları taşımıyor
+
+Dikkat edin: `widget_payload` sadece `columns` ve `row_count` taşıyor, **gerçek 7 satırın kendisini değil**. Bu, [Sorgu Pipeline'ı](/ai/query-pipeline)'ndaki "LLM sadece şekli görür" prensibinin, **kalıcılık katmanına da** taşınmış hâli — mesaj geçmişinde bile gerçek veri gömülü tutulmuyor.
+
+### Bu bizim "TTL + referans" varsayımımızı değiştiriyor
+
+[MongoDB edge case'lerinde](/edge-cases/mongodb) (EDGE-CASE-012, 013), `real_rows`'un ayrı bir TTL'li `query_results` koleksiyonunda tutulup bir `result_ref` ile referanslanacağını varsaymıştık. Gerçek şema daha basit bir yol öneriyor: **satırları hiç saklama, gerektiğinde yeniden üret.**
+
+<CodeRail>
+  <CodeEditor
+    filename="services/history_service.py"
+    code={`async def replay_widget(bucket_message: dict, tenant_id: str, user_id: str) -> dict:
+    # Gerçek satırlar hiç saklanmamıştı — ama tool_call'ın GİRDİSİ küçük ve kalıcı
+    tool_call = bucket_message["tool_calls"][0]
+
+    # Aynı sorguyu, aynı guard zincirinden geçirerek YENİDEN çalıştır
+    real_rows = await guard_and_run(
+        tool_call["input_params"], tenant_id, user_id, ALLOWED_TABLES
+    )
+    return build_render_event(bucket_message["ui_widgets"][0], real_rows)`}
+  />
+</CodeRail>
+
+Bunun TTL+referans'a göre avantajı: **"süresi doldu" diye bir durum yok** — `tool_calls[].input_params` kalıcı olduğu için istediğiniz zaman yeniden çalıştırılabilir, EDGE-CASE-013'teki "süresi dolmuş referans" sorunu kökten ortadan kalkıyor. Bedeli: her "az önceki tabloyu göster" isteği, cache'lenmiş veri yerine gerçek bir sorgu daha çalıştırıyor — basit sorgularda önemsiz, ama sık tekrarlanan pahalı sorgularda [Semantic Caching](/cost-management/semantic-caching) tam burada devreye girer.
+
+## 2 — Kalıcı, kişiselleştirilmiş dashboard: ayrı bir varlık gerekiyor
+
+`ai_message_buckets` bir **sohbetin** parçası — kullanıcı sohbeti kapatıp "Dashboard'larım" gibi ayrı bir ekrandan tekrar açabileceği bir yapı istiyorsa (örn. [UI Ağacı](/ai/ui-tree)'ndaki Grid örneğini kalıcı olarak kaydetmek), bu mesaj geçmişinden **bağımsız** yaşamalı — tıpkı Claude'un "Artifacts" özelliğinin bir sohbetin mesaj akışına gömülü olmayıp kendi başına bir nesne olarak saklanması, tekrar ziyaret edilebilmesi gibi.
+
+Bu henüz şemamızda yok — gerçek şemanın kendi konvansiyonlarına (uuid PK, `tenant_id`/`created_by` audit alanı, `jsonb`) uyan bir öneri:
+
+<CodeRail>
+  <CodeEditor
+    filename="user_dashboards (öneri — henüz şemada yok)"
+    code={`CREATE TABLE user_dashboards (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL REFERENCES tenants(id),
+  user_id uuid NOT NULL REFERENCES users(id),
+  title varchar(150) NOT NULL,
+  tree jsonb NOT NULL,              -- UINode ağacı — veri değil, sadece yapı
+  catalog_version varchar(20) NOT NULL,  -- bkz. Catalog Versiyonlama
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Not: bu tabloda "rows"/"real data" kolonu YOK — $state referansları
+-- her açılışta ilgili tool_registry sorgularıyla TAZE çözülüyor,
+-- tıpkı sohbet içi widget'ların replay_widget() ile yeniden üretilmesi gibi`}
+  />
+</CodeRail>
+
+Prensip aynı kalıyor: **kalıcı olan yapı (`tree`), kalıcı olmayan veri.** Dashboard her açıldığında `tree` içindeki `$state` referansları, o anki gerçek veriyle (tool_registry'deki sorgular üzerinden) yeniden doldurulur — ay sonu kapanan deal sayısı değişmiş olsa bile dashboard hep güncel kalır, ayrıca "veri bayatladı" diye bir durum hiç oluşmaz.
+
+## Sektördeki karşılıkları — bunu biz icat etmiyoruz
+
+- **Vercel AI SDK'nın `message.parts` pattern'i** — her mesaj, tip bazlı önekli (`text_*`, `tool_[toolName]_*`, `data_[dataType]_*`) parçalara ayrılıyor, ayrı bir `parts` tablosunda saklanıyor. Bizim `tool_calls[]`/`ui_widgets[]` alanlarımız aynı fikrin Mongo'daki gömülü-dizi karşılığı.
+- **Claude Artifacts** — bir artifact, sohbetin mesaj akışına gömülü değil; kendi başına bir nesne olarak saklanıyor, ayrı açılıp tekrar düzenlenebiliyor. Bizim önerdiğimiz `user_dashboards` tablosu aynı ayrımı yapıyor: sohbet içi widget (mesajın parçası) vs. kalıcı dashboard (kendi nesnesi).
+
+## Özet
+
+| Senaryo | Nerede yaşıyor | Gerçek veri saklanıyor mu |
+|---|---|---|
+| Sohbet içi tablo/grafik | `ai_message_buckets.messages[].ui_widgets[]` | Hayır — sadece şekil (`columns`, `row_count`) |
+| "Az önceki tabloyu tekrar göster" | `tool_calls[].input_params` ile yeniden sorgula | Hayır — her seferinde taze çalıştırılır |
+| Kalıcı, kişiselleştirilmiş dashboard | `user_dashboards.tree` (öneri) | Hayır — sadece `UINode` ağacı, veri `$state` ile her açılışta taze çözülür |

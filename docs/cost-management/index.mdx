@@ -1,0 +1,25 @@
+---
+title: Genel Bakış
+sidebar_position: 1
+description: LLM çağrılarının maliyet kalemleri — her biri ayrı sayfa, durumu ve çözüm yönü ile.
+---
+
+# Maliyet Yönetimi
+
+AI katmanının her kullanıcı mesajında en az 2-3 LLM çağrısı yaptığını [Sorgu Pipeline'ı](/ai/query-pipeline)'nda gördük. Bu sayfa, o çağrıların maliyetini düşürmek için bilinen kaldıraçları **tek tek** listeliyor — her biri ayrı sayfa, her sayfada net bir **Durum** (henüz uygulanmadı / planlandı / ertelendi) ve **çözüm yönü**. Edge Case'ler bölümünden farkı: orası "kırılan bir şey" belgeliyor, burası "para yakan ama kırılmayan bir şey" belgeliyor.
+
+## Kalemler
+
+| Kalem | Durum | Öncelik | Neden |
+|---|---|---|---|
+| [Prompt Caching](/cost-management/prompt-caching) | Henüz uygulanmadı | Yüksek — önce bu | Katalog gibi statik context her istekte tam fiyatına gönderiliyor |
+| [Model Cascading](/cost-management/model-cascading) | Henüz uygulanmadı | Yüksek — bununla birlikte | Her SQL isteği otomatik en pahalı modele gidiyor, basit sorgular da dahil |
+| [Semantic Caching](/cost-management/semantic-caching) | Ertelendi | Düşük — embedding altyapısı kurulunca | Aynı niyetin farklı ifadeleri her seferinde LLM'e gidiyor |
+
+## Neden bu sırayla
+
+Prompt caching ve model cascading, mevcut pipeline'a **ek altyapı gerektirmeden** eklenebiliyor — ikisi de sadece mevcut LLM çağrısının nasıl yapıldığını değiştiriyor. Semantic caching ise bir vektör DB + embedding katmanı gerektiriyor; bu altyapı zaten [Catalog / Retrieval](/edge-cases/catalog-retrieval) için de gerekecek — iki ayrı yatırım yerine, o katman kurulduğunda semantic caching'i üstüne eklemek daha ucuz.
+
+## Ortak prensip — hiçbiri güvenlik modelini bozmuyor
+
+Üçü de şu kurala tabi: **cache'lenen ya da atlanan şey her zaman LLM'in kararı (`sql`, `component`, `columns`), asla gerçek veri (`real_rows`) değil.** Semantic cache hit olsa bile `guard_and_run` her zaman yeniden çalışır — SQL güncel veriye karşı taze çalıştırılır, tenant/RLS izolasyonu hiçbir zaman atlanmaz. Maliyet optimizasyonu, [Sorgu Pipeline'ı](/ai/query-pipeline)'ndaki "LLM asla gerçek veri görmez" prensibinin üstüne kuruluyor, onu bozmuyor.

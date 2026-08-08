@@ -1,0 +1,43 @@
+---
+title: Model Cascading
+sidebar_position: 3
+description: "Durum: Henüz uygulanmadı. Basit isteklerde ucuz model, sadece gerektiğinde pahalı modele yükselme."
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Model Cascading
+
+**Durum: Henüz uygulanmadı — öncelikli, prompt caching ile birlikte.**
+
+## Sorun
+
+Şu anki tasarımda `purpose`'a göre **sabit** model ataması var — `intent_detection` her zaman mini model, `tool_call` (SQL üretimi) her zaman ana model. Ama `tool_call` içindeki isteklerin zorluğu birbirinden çok farklı: tek tablolu, filtresiz bir `SELECT` ile 3 tabloyu JOIN'leyip agregasyon yapan bir sorgu aynı maliyeti ödüyor, çünkü ikisi de doğrudan en pahalı modele gidiyor.
+
+## Çözüm — akademik adıyla "cascading" (FrugalGPT), önce ucuzu dene
+
+<CodeRail>
+  <CodeEditor
+    filename="services/model_router.py"
+    code={`async def cascaded_sql_generation(user_message: str, catalog: dict) -> dict:
+    # 1. Önce ucuz model dene
+    cheap_result = await ask_llm(model="haiku", purpose="tool_call", catalog=catalog, message=user_message)
+    if cheap_result["confidence"] == "high":
+        return cheap_result   # tek tablolu basit sorgular çoğunlukla burada biter
+
+    # 2. Ucuz model yetersizse (confidence: low, ya da SQL Guard reddederse), pahalıya yükselt
+    return await ask_llm(model="sonnet", purpose="tool_call", catalog=catalog, message=user_message)`}
+  />
+</CodeRail>
+
+`confidence` alanı, ana LLM'in kendi çıktısına eklediği bir öz-değerlendirme (native tool schema'ya `confidence: "high" | "low"` enum'u eklenerek) — model kendini değerlendiriyor, ekstra bir LLM çağrısı gerekmiyor.
+
+## Neden güvenli — Guard katmanı model'den bağımsız
+
+Hangi model SQL'i üretirse üretsin, [SQL Guard](/ai/security-model)'dan geçmeden çalıştırılmıyor — ucuz modelin ürettiği SQL de, pahalı modelin ürettiği SQL de aynı `guard_and_run`'dan geçiyor. Cascading, güvenlik zincirinin **öncesinde** bir maliyet kararı, zincirin kendisini değiştirmiyor.
+
+## Sıradaki adım
+
+`confidence` alanının tool şemasına nasıl ekleneceğini ve "düşük güven" eşiğinin nerede çekileceğini netleştirmek — henüz karara bağlanmadı.

@@ -1,0 +1,55 @@
+---
+title: Prompt Caching
+sidebar_position: 2
+description: "Durum: Henüz uygulanmadı. Katalog gibi statik context'i Bedrock'un ephemeral cache'iyle ucuzlatmak."
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Prompt Caching
+
+**Durum: Henüz uygulanmadı — öncelikli.**
+
+## Sorun — iki ayrı katalog var, ikisi de statik
+
+Her LLM çağrısına aslında **iki farklı** katalog gidiyor, ikisi de sohbetten sohbete neredeyse hiç değişmiyor:
+
+1. **Tablo/alan kataloğu** (`available_tables`/`available_fields`) — [Sorgu Pipeline'ı](/ai/query-pipeline)'nda SQL üretimi için, tenant'ın entegrasyonlarına göre şekilleniyor.
+2. **UI component kataloğu** — `Row`/`Grid`/`Column` gibi container'lar ve `LineChart`/`DataTable` gibi yaprak component'lerin isimleri + Pydantic şemaları + hangi component'in `children` kabul ettiği (`accepts_children`) bilgisi. Bu, [Sorgu Pipeline'ı](/ai/query-pipeline)'ndaki adım 4'te (UI seçimi) anlatılan **tekil component** örneğinin ötesinde — gerçekte LLM artık tek bir `{component, columns}` değil, iç içe geçebilen bir **ağaç** (`UINode`: `type` + `props` + `children`) üretiyor; `Row`'un altına iki child koyarak "yan yana göster" gibi istekler karşılanıyor. Bu ağaç kataloğu, tablo kataloğundan bile daha statik — component tanımları neredeyse hiç değişmiyor, sadece `catalog_version` yükseldiğinde güncelleniyor (bkz. [Catalog Versiyonlama](/edge-cases/catalog-versioning)).
+
+Buna rağmen ikisi de her istekte tam token fiyatına gönderiliyor. [Catalog / Retrieval](/edge-cases/catalog-retrieval) case'lerinde işaret ettiğimiz gibi, tool/katalog metadata'sı context'in büyük bir kısmını (Anthropic'in kendi verisine göre bazı ortamlarda ~%40'ını) oluşturabiliyor — statik olmasına rağmen.
+
+## Çözüm — Bedrock'un ephemeral cache'i, her iki katalog için ayrı ayrı
+
+<CodeRail>
+  <CodeEditor
+    filename="services/llm_client.py"
+    code={`messages = [{
+    "role": "system",
+    "content": [
+        {
+            "type": "text",
+            "text": build_table_catalog(tenant_id),     # tablo/alan kataloğu — tenant başına statik
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "type": "text",
+            "text": UI_COMPONENT_CATALOG,               # Row/Grid/DataTable şemaları — TÜM tenant'lar için ortak
+            "cache_control": {"type": "ephemeral"},      # tenant'tan bağımsız, tek bir cache girdisi yeterli
+        },
+    ],
+}]
+
+# UI kataloğu tenant'tan bağımsız olduğu için cache hit oranı tablo kataloğundan bile yüksek olur`}
+  />
+</CodeRail>
+
+## Neden güvenli — cache'lenen veri değil, şema
+
+Cache'e giren şey tablo/alan isimleri ve component şemaları — **hiçbir tenant'a özel gerçek veri (`real_rows`) bu cache'e hiç girmiyor**, UI ağacındaki `props` da gerçek değerleri değil `{"$state": "/path"}` referanslarını taşıyor. Zaten [Sorgu Pipeline'ı](/ai/query-pipeline)'nda LLM'e gerçek veri gitmiyordu, cache de aynı prensibi koruyor. Tek dikkat noktası: tablo kataloğu `tenant_id`'ye göre farklılaşıyorsa (bkz. [Catalog / Retrieval](/edge-cases/catalog-retrieval)), o katmanın cache anahtarı tenant bazlı ayrılmalı — UI component kataloğu ise tüm tenant'lar için ortak olduğundan tek bir global cache girdisi yeterli.
+
+## Sıradaki adım
+
+Hangi context parçalarının gerçekten "statik" (tenant başına nadiren değişen) olduğunu netleştirip `cache_control` sınırlarını (katalog mı, sistem talimatı mı, ikisi mi) belirlemek — henüz karara bağlanmadı.

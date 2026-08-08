@@ -116,6 +116,14 @@ const config: Config = {
               label: 'Entegrasyonlar',
               to: '/integrations',
             },
+            {
+              label: "Edge Case'ler",
+              to: '/edge-cases',
+            },
+            {
+              label: 'Maliyet Yönetimi',
+              to: '/cost-management',
+            },
           ],
         },
       ],

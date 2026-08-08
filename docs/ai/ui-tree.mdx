@@ -1,0 +1,254 @@
+---
+title: UI Ağacı (JSON-Driven UI Tree)
+sidebar_position: 6
+description: LLM'in tek bir component yerine iç içe geçmiş bir ağaç ürettiği mimari — model, doğrulama, state binding, client render ve canlı örnek.
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+import UITreePlayground from '@site/src/components/UITreePlayground';
+
+# UI Ağacı (JSON-Driven UI Tree)
+
+[Sorgu Pipeline'ı](/ai/query-pipeline)'ndaki adım 4 ("UI seçimi"), anlatım kolaylığı için LLM'in tek bir `{component, columns}` ürettiğini varsayıyordu. Gerçekte bu yeterli değil: "grafiği ve tabloyu yan yana koy" ya da "kendi dashboard'umu kur" gibi istekler **tek bir component** ile ifade edilemez — [render_service edge case'lerinde](/edge-cases/render-service/overview) (EDGE-CASE-008) bu eksiklik zaten işaretlenmişti. Bu sayfa, onun yerine geçen **ağaç** mimarisini uçtan uca anlatıyor.
+
+## Endüstride bu pattern'in adı var — sıfırdan icat etmiyoruz
+
+İki ayrı, iyi bilinen pattern'in birleşimi:
+
+- **Server-Driven UI (SDUI)** — mobil mühendislikte uzun süredir kullanılan bir yaklaşım (Airbnb, Lyft, DoorDash gibi şirketlerin mühendislik bloglarında detaylıca anlattığı): sunucu, ekranın **yapısını** (hangi component, hangi sırada, hangi iç içelikte) JSON olarak gönderir; native uygulama sadece önceden derlenmiş component'leri bu JSON'a göre dizer. Uygulamayı güncellemeden ekran düzenini değiştirebilme ihtiyacından doğdu.
+- **Generative UI** — Vercel AI SDK'nın popülerleştirdiği, LLM'in bir sohbet akışında serbest metin yerine **yapılandırılmış, önceden tanımlı component'ler** ürettiği pattern.
+
+Bizim mimarimiz bu ikisinin kesişimi: SDUI'nin "sunucu yapıyı belirler, client sadece dizer" güvenlik modeli + Generative UI'nin "LLM bu yapıyı doğal dilden üretir" esnekliği. İkisi de bizim zaten baştan kurduğumuz "LLM asla gerçek veri görmez, sadece isim/yapı üretir" prensibiyle birebir uyumlu.
+
+## Model — `UINode`
+
+Ağacın her düğümü aynı üç alana sahip: `type` (hangi component), `props` (component'e geçecek ayarlar), `children` (varsa alt düğümler).
+
+<CodeRail>
+  <CodeEditor
+    filename="models/ui_node.py"
+    code={`from pydantic import BaseModel
+
+class UINode(BaseModel):
+    type: str                     # catalog'da whitelist'li olmalı
+    props: dict = {}
+    children: list["UINode"] = []
+
+UINode.model_rebuild()  # recursive (self-referencing) model için gerekli`}
+  />
+</CodeRail>
+
+## Catalog — hangi component'ler `children` kabul ediyor
+
+`Row`/`Grid`/`Column` gibi container'lar `children` kabul eder (`accepts_children: True`); `DataTable`/`LineChart`/`StatCard` gibi yapraklar kabul etmez. Her component'in kendi Pydantic prop şeması var — bu, [render_service EDGE-CASE-010](/edge-cases/render-service/overview#edge-case-010-şema-bazlı-prop-validasyonu-yok)'daki "şema doğrulaması yok" sorununu tam olarak kapatıyor.
+
+<CodeRail>
+  <CodeEditor
+    filename="services/ui_catalog.py"
+    code={`class RowProps(BaseModel):
+    pass  # layout container'ların kendine özel prop'u yok
+
+class DataTableProps(BaseModel):
+    columns: list[str]
+    rows: dict  # {"$state": "/path"} bekleniyor, gerçek veri değil
+
+class LineChartProps(BaseModel):
+    title: str
+    points: dict  # {"$state": "/path"}
+
+class StatCardProps(BaseModel):
+    label: str
+    value: dict  # {"$state": "/path"}
+
+CATALOG = {
+    "Row":       {"accepts_children": True,  "schema": RowProps},
+    "Grid":      {"accepts_children": True,  "schema": RowProps},
+    "Column":    {"accepts_children": True,  "schema": RowProps},
+    "DataTable": {"accepts_children": False, "schema": DataTableProps},
+    "LineChart": {"accepts_children": False, "schema": LineChartProps},
+    "StatCard":  {"accepts_children": False, "schema": StatCardProps},
+}`}
+  />
+</CodeRail>
+
+## Doğrulama — `validate_and_resolve`
+
+Tek bir recursive fonksiyon, her seviyede aynı üç kontrolü yapıyor: component whitelist'te mi, prop'lar şemaya uyuyor mu, `children` varsa bu component gerçekten kabul ediyor mu. `max_depth` sınırı, LLM'in kazayla ya da kasıtlı olarak sonsuz iç içe ağaç üretmesine karşı.
+
+<CodeRail>
+  <CodeEditor
+    filename="services/ui_validator.py"
+    code={`def validate_and_resolve(node: dict, max_depth: int = 6, depth: int = 0) -> UINode:
+    if depth > max_depth:
+        raise ValueError("ai.max_nesting_exceeded")
+
+    spec = CATALOG.get(node["type"])
+    if not spec:
+        raise ValueError(f"ai.unknown_component: {node['type']}")
+
+    props = spec["schema"](**node.get("props", {}))  # Pydantic tip/alan kontrolü
+
+    children_raw = node.get("children", [])
+    if children_raw and not spec["accepts_children"]:
+        raise ValueError(f"ai.invalid_nesting: {node['type']} cannot have children")
+
+    children = [validate_and_resolve(c, max_depth, depth + 1) for c in children_raw]
+    return UINode(type=node["type"], props=props.model_dump(), children=children)`}
+  />
+</CodeRail>
+
+## State binding — veri ağaca gömülmüyor, ayrı gidiyor
+
+`props` içindeki değerler gerçek veri değil, `{"$state": "/path"}` referansı. Gerçek satırlar (`real_rows`) ayrı bir `state` objesinde taşınıyor — [Sorgu Pipeline'ı](/ai/query-pipeline)'ndaki "LLM'in kararı ile gerçek veri backend'de birleşiyor" prensibinin ağaca uyarlanmış hali.
+
+<CodeRail>
+  <CodeEditor
+    filename="services/render_service.py"
+    code={`def build_render_event(tree: UINode, state: dict) -> dict:
+    return {
+        "tree": tree.model_dump(),   # LLM'in ürettiği, doğrulanmış yapı
+        "state": state,              # gerçek veri — LLM bunu hiç görmedi
+    }
+
+# Aynı tree, farklı bir kullanıcının state'iyle yeniden kullanılabilir —
+# kişiselleştirme burada: yapı sabit, veri değişken`}
+  />
+</CodeRail>
+
+## Client — tek recursive `renderNode`, component sayısı ne olursa olsun değişmiyor
+
+<CodeRail>
+  <CodeEditor
+    filename="components/renderNode.tsx"
+    code={`import { COMPONENT_REGISTRY } from "./registry";
+
+function resolveStateRefs(value: unknown, state: Record<string, unknown>): unknown {
+  if (value && typeof value === "object" && "$state" in (value as any)) {
+    const path = (value as any).$state.replace(/^\\//, "");
+    return path.split(".").reduce((acc: any, key: string) => acc?.[key], state);
+  }
+  if (Array.isArray(value)) return value.map((v) => resolveStateRefs(v, state));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, resolveStateRefs(v, state)])
+    );
+  }
+  return value;
+}
+
+function renderNode(node: UINode, state: Record<string, unknown>): ReactNode {
+  const Component = COMPONENT_REGISTRY[node.type];   // isimle arama, eval yok
+  if (!Component) return null;
+
+  const props = resolveStateRefs(node.props, state);
+  const children = node.children?.map((c, i) => <React.Fragment key={i}>{renderNode(c, state)}</React.Fragment>);
+
+  return <Component {...props}>{children}</Component>;
+}`}
+  />
+</CodeRail>
+
+## Canlı örnek — JSON'dan render'a
+
+Aşağıdaki dört durum, backend'in üreteceği **gerçek JSON**'u ve `renderNode`'un onu nasıl ekrana bastığını canlı gösteriyor — soldaki JSON değişince sağdaki render da değişiyor, aradaki tek şey yukarıdaki `renderNode` fonksiyonu:
+
+<UITreePlayground
+  cases={[
+    {
+      id: 'single',
+      label: 'Tek component',
+      description: 'En basit durum — hiç children yok, [Sorgu Pipeline\'ı](/ai/query-pipeline)\'ndaki örnekle birebir aynı.',
+      tree: {
+        type: 'DataTable',
+        props: { columns: ['Müşteri', 'Tutar'], rows: { $state: '/customers' } },
+      },
+      state: {
+        customers: [
+          { Müşteri: 'Akgün Ticaret', Tutar: '₺28.400' },
+          { Müşteri: 'Deniz Yapı A.Ş.', Tutar: '₺61.200' },
+        ],
+      },
+    },
+    {
+      id: 'row',
+      label: 'Row — yan yana',
+      description: '"Grafiği ve özet kartı yan yana göster" — Row, children kabul eden bir container.',
+      tree: {
+        type: 'Row',
+        children: [
+          { type: 'StatCard', props: { label: 'Toplam Gecikme', value: { $state: '/total_overdue' } } },
+          { type: 'LineChart', props: { title: 'Aylık Trend', points: { $state: '/monthly_trend' } } },
+        ],
+      },
+      state: { total_overdue: '₺102.350', monthly_trend: [12, 19, 14, 22, 30, 25, 34] },
+    },
+    {
+      id: 'grid',
+      label: 'Grid — dashboard',
+      description: '"Kendi dashboard\'umu kur" — 4 farklı component tek bir Grid altında, sıfır ekstra kod.',
+      tree: {
+        type: 'Grid',
+        children: [
+          { type: 'StatCard', props: { label: 'Toplam Müşteri', value: { $state: '/customer_count' } } },
+          { type: 'StatCard', props: { label: 'Bu Ay Gelir', value: { $state: '/monthly_revenue' } } },
+          { type: 'LineChart', props: { title: 'Gelir Trendi', points: { $state: '/revenue_trend' } } },
+          { type: 'DataTable', props: { columns: ['Müşteri', 'Risk'], rows: { $state: '/risky_customers' } } },
+        ],
+      },
+      state: {
+        customer_count: 128,
+        monthly_revenue: '₺842.000',
+        revenue_trend: [40, 55, 48, 62, 70, 65, 80],
+        risky_customers: [
+          { Müşteri: 'Pınar Lojistik', Risk: 'Yüksek' },
+          { Müşteri: 'Aksoy Gıda', Risk: 'Orta' },
+        ],
+      },
+    },
+    {
+      id: 'nested',
+      label: 'İç içe (2 seviye)',
+      description: 'Column içinde bir Row, Row içinde iki StatCard — max_depth kontrolünün gerçek sebebi bu iç içelik.',
+      tree: {
+        type: 'Column',
+        children: [
+          {
+            type: 'Row',
+            children: [
+              { type: 'StatCard', props: { label: 'Aktif Tenant', value: { $state: '/active_tenants' } } },
+              { type: 'StatCard', props: { label: 'Churn Oranı', value: { $state: '/churn_rate' } } },
+            ],
+          },
+          { type: 'DataTable', props: { columns: ['Tenant', 'Plan'], rows: { $state: '/tenant_list' } } },
+        ],
+      },
+      state: {
+        active_tenants: 342,
+        churn_rate: '%2.1',
+        tenant_list: [
+          { Tenant: 'Akgün Holding', Plan: 'Enterprise' },
+          { Tenant: 'Deniz Yapı', Plan: 'Pro' },
+        ],
+      },
+    },
+  ]}
+/>
+
+## Bu mimarinin kapattığı bilinen sorunlar
+
+| Sorun | Nasıl kapanıyor |
+|---|---|
+| [EDGE-CASE-008](/edge-cases/render-service/overview) — layout/nested component desteği yok | `Row`/`Grid`/`Column` + recursive `children`, sıfır ekstra kod |
+| [EDGE-CASE-009](/edge-cases/render-service/overview) — state/data binding ayrımı yok | `{"$state": "/path"}` + ayrı `state` objesi |
+| [EDGE-CASE-010](/edge-cases/render-service/overview) — şema bazlı prop validasyonu yok | Component başına Pydantic şeması, `validate_and_resolve` |
+| [Catalog Versiyonlama](/edge-cases/catalog-versioning) — eski ağaç yeni component API'siyle uyumsuz | `catalog_version` her ağaçla birlikte persist edilir |
+| [Prompt Caching](/cost-management/prompt-caching) — UI kataloğu her istekte tam gönderiliyor | `CATALOG` tüm tenant'lar için ortak, tek global cache girdisi |
+
+## Referanslar
+
+- **Server-Driven UI (SDUI)** — Airbnb, Lyft, DoorDash gibi şirketlerin mobil mühendislik ekiplerinin uzun süredir kullandığı, "sunucu yapıyı belirler, client sadece önceden derlenmiş component'lerle dizer" pattern'i.
+- **Generative UI** — Vercel AI SDK'nın popülerleştirdiği, LLM'in sohbet akışında serbest metin yerine yapılandırılmış component üretmesi pattern'i.
+- [Sorgu Pipeline'ı](/ai/query-pipeline) — bu ağacın LLM tarafında hangi adımda üretildiği.
+- [Katalog / Registry](/ai/registry) — component'lerin isim+şema olarak nasıl tanımlandığı.

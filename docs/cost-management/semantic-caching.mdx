@@ -1,0 +1,70 @@
+---
+title: Semantic Caching
+sidebar_position: 4
+description: "Durum: Ertelendi. Aynı niyetin farklı ifadelerinde LLM pipeline'ının tamamını atlamak — embedding altyapısı gerektiriyor."
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Semantic Caching
+
+**Durum: Ertelendi — [Catalog / Retrieval](/edge-cases/catalog-retrieval) için kurulacak embedding altyapısıyla birlikte devreye alınacak.**
+
+## Sorun
+
+Kullanıcılar aynı soruyu farklı kelimelerle sorar: "geciken müşterileri göster", "ödemesi gecikenler kim", "vadesi geçmiş faturalar" — üçü de aynı SQL'e çıkıyor ama şu anki pipeline üçünü de baştan sona (niyet tespiti + SQL üretimi + UI seçimi) yeniden çalıştırıyor. Prompt caching (bkz. [Prompt Caching](/cost-management/prompt-caching)) sadece statik katalog kısmını ucuzlatıyor; niyet aynı olsa bile LLM çağrılarının kendisi tekrar tekrar yapılıyor.
+
+## Çözüm — niyet embedding'i ile önceki karara atlama
+
+<CodeRail>
+  <CodeEditor
+    filename="services/semantic_cache.py"
+    code={`async def check_semantic_cache(user_message: str, tenant_id: str, threshold: float = 0.95) -> dict | None:
+    query_embedding = await embed(user_message)  # LLM değil, embedding modeli
+
+    cached = await db.query_cache.aggregate([
+        {"$match": {"tenant_id": tenant_id}},   # tenant izolasyonu burada da zorunlu
+        {"$vectorSearch": {
+            "index": "cache_embedding_idx",
+            "queryVector": query_embedding,
+            "path": "embedding",
+            "numCandidates": 20,
+            "limit": 1,
+        }},
+    ]).to_list(1)
+
+    if cached and cached[0]["score"] >= threshold:
+        return cached[0]["llm_decision"]   # SQL + render kararı — LLM'e HİÇ gitmeden
+    return None`}
+  />
+</CodeRail>
+
+<CodeRail>
+  <CodeEditor
+    filename="routers/chat.py"
+    code={`async def handle_message(user_message: str, tenant_id: str, user_id: str):
+    cached_decision = await check_semantic_cache(user_message, tenant_id)
+    if cached_decision:
+        real_rows = await guard_and_run(cached_decision["sql"], tenant_id, user_id, ALLOWED_TABLES)
+        return build_render_event(cached_decision, real_rows)  # SQL çalıştı, LLM çağrısı SIFIR
+
+    # Cache miss — normal pipeline (niyet + SQL + render)
+    decision = await run_full_llm_pipeline(user_message, tenant_id)
+    await db.query_cache.insert_one({"tenant_id": tenant_id, "embedding": ..., "llm_decision": decision})
+    return build_render_event(decision, real_rows)`}
+  />
+</CodeRail>
+
+## Neden güvenli — cache'lenen şey karar, veri değil
+
+Cache'e giren şey `llm_decision` (`sql`, `component`, `columns`) — **`real_rows` hiçbir zaman cache'e girmiyor.** Cache hit olsa bile `guard_and_run` her seferinde yeniden çalışıyor: SQL her zaman güncel veriye karşı taze çalıştırılıyor, tenant/RLS izolasyonu hiçbir zaman atlanmıyor. Atlanan tek şey, LLM'in "hangi SQL/component" kararını üretme maliyeti.
+
+## Neden ertelendi
+
+Bu, [Catalog / Retrieval](/edge-cases/catalog-retrieval) case'lerinde tartıştığımız embedding/vektör arama altyapısıyla **aynı bileşenleri** paylaşıyor (embedding modeli + vektör index). Retrieval katmanı katalog büyüdüğünde zaten kurulacak — semantic caching'i o zaman, aynı altyapı üzerine, ayrı bir yatırım gerektirmeden eklemek daha ucuz. Şu an erken.
+
+## Sıradaki adım
+
+`threshold` değerinin (0.95) query tipine göre nasıl ayarlanacağı (SQL üretimi gibi kesinlik gerektiren kararlarda daha yüksek, UI seçimi gibi toleranslı kararlarda daha düşük) — henüz karara bağlanmadı, retrieval altyapısı kurulunca netleştirilecek.

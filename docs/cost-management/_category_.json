@@ -1,0 +1,9 @@
+{
+  "label": "Maliyet Yönetimi",
+  "position": 8,
+  "link": {
+    "type": "generated-index",
+    "slug": "/cost-management",
+    "description": "LLM çağrılarının maliyet kalemleri — hangi kaldıraç, hangi durumda, çözüm yolu ne."
+  }
+}

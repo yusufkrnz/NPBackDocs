@@ -8,6 +8,10 @@ import CodeEditor from '@site/src/components/CodeEditor';
 
 # Doküman Boyutu ve TTL
 
+:::info Güncelleme — gerçek şemamız bu ikisini de farklı çözüyor
+Aşağıdaki 2 case, "real_rows'u TTL'li ayrı bir koleksiyonda tut" varsayımına dayanıyordu. Gerçek şemamızdaki `ai_message_buckets` (bkz. [Dinamik UI'ın Kalıcılığı](/ai/ui-persistence)) daha basit bir yol seçiyor: **gerçek satırları hiç saklamıyor**, sadece şekli (`columns`, `row_count`) mesajın içinde tutuyor; "tekrar göster" istendiğinde `tool_calls[].input_params` ile sorgu yeniden çalıştırılıyor. Bu, TTL süresinin dolması sorununu (EDGE-CASE-013) kökten ortadan kaldırıyor. Aşağıdaki case'ler yine de geçerli — biri **TTL+referans** pattern'ini seçerse (ör. pahalı sorguları her seferinde yeniden çalıştırmamak için) bu riskler karşısına çıkar.
+:::
+
 Doğru pattern: `conversations` koleksiyonu küçük ve kalıcı kalmalı, büyük/geçici veri (`real_rows`) ayrı bir `query_results` koleksiyonunda, TTL index ile otomatik silinerek durmalı. Aşağıdaki 2 case, bu ayrım yapılmazsa/eksik yapılırsa ortaya çıkar.
 
 ## EDGE-CASE-012: `real_rows` Conversation Dokümanına Gömülürse 16MB Limiti Riski
