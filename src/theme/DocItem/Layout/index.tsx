@@ -31,8 +31,14 @@ function DocItemLayoutInner({ children }: { children: ReactNode }): ReactNode {
   const wideToc = Boolean((frontMatter as { wide_toc?: boolean }).wide_toc);
 
   return (
-    <div className="row">
-      <div className={clsx('col', !docTOC.hidden && !wideToc && styles.docItemCol)}>
+    <div className={clsx('row', wideToc && styles.rowNowrap)}>
+      <div
+        className={clsx(
+          'col',
+          !docTOC.hidden && !wideToc && styles.docItemCol,
+          wideToc && styles.docItemColWide,
+        )}
+      >
         <ContentVisibility metadata={metadata} />
         <DocVersionBanner />
         <div className={styles.docItemContainer}>

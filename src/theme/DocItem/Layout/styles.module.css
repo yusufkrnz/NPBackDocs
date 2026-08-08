@@ -8,3 +8,32 @@
     max-width: 75% !important;
   }
 }
+
+/*
+ * wide_toc sayfalarında sol kolona genişlik sınırı YOK (docItemCol uygulanmıyor) —
+ * bu, Infima'nın flex .row'unda klasik bir soruna açık bırakıyor: flex item'lar
+ * varsayılan olarak min-width:auto, yani içerik (uzun tablo, kırılmayan kod satırı)
+ * kolonun kendi genişliğinden daha geniş olursa .row'un tamamı wrap edip sağdaki
+ * TOC/CodeRail kolonunu alta düşürüyor (ya da geçiş anında üst üste bindiriyor).
+ * min-width:0 + flex-wrap:nowrap bunu kökten engelliyor — taşan içerik artık
+ * kolonun KENDİ İÇİNDE yatay scroll ile taşınıyor, satır asla wrap etmiyor.
+ */
+.rowNowrap {
+  flex-wrap: nowrap;
+}
+
+.docItemColWide {
+  min-width: 0;
+}
+
+.docItemColWide :global(table) {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+@media (max-width: 996px) {
+  .rowNowrap {
+    flex-wrap: wrap;
+  }
+}
