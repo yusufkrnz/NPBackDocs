@@ -15,7 +15,10 @@ import CodeRail from '@site/src/components/CodeRail';
     requestHeaders={{ Authorization: 'Bearer <süper-admin-token>' }}
     request={{
       company_name: 'Akgün Ticaret',
+      plan_id: 'pln_growth',
       admin_email: 'ayse@akguntic.com',
+      admin_first_name: 'Ayşe',
+      admin_last_name: 'Yılmaz',
       delivery: 'invite',
     }}
     response={{ tenant_id: 'tn_3d9f21', user_id: 'usr_8f2a1c', message_code: 'admin.tenant.invite_sent' }}
@@ -30,6 +33,18 @@ Bu akış daha önce **self-servis kayıt** (`POST /auth/register`, kullanıcı 
 
 Bu endpoint **genel kullanıma açık değil** — sadece platform'un kendi `is_super_admin` yetkisine sahip kullanıcıları çağırabilir (bkz. [Guard Mimarisi](/guards) — `permission_guard`). Çağrıldığında hem yeni bir **tenant** (şirket) hem de o tenant'ın ilk kullanıcısı **admin rolüyle** birlikte oluşturulur. NewPortal bir B2B SaaS olduğu için sisteme "boşluğa" kayıt olan tek bir kullanıcı yoktur; her kullanıcı bir tenant'a bağlıdır — ya süper admin burada yeni bir tenant açar (ilk kişi), ya da [Ekip Daveti](/use-cases/team-invitation) ile var olan bir tenant'a katılır.
 
+## Alanlar
+
+| Alan | Zorunlu mu | Not |
+|---|---|---|
+| `company_name` | Evet | `Tenants.legal_name` — resmi unvan |
+| `plan_id` | Evet | Satış görüşmesinde anlaşılan paket → `subscription_plans.id` (bkz. [databaseschema](https://yusufkrnz.github.io/databaseschema/postgres/platform/subscription-plans)); `Tenants.plan_id` buraya işaret eder, `monthly_token_quota` buradan gelir |
+| `admin_email` | Evet | İlk admin'in e-postası — tüm tenant'lar genelinde tekil olmalı |
+| `admin_first_name`, `admin_last_name` | Evet | `Users.first_name`/`last_name` — boş "davet edilen kişi" değil, gerçek isimle oluşturulur |
+| `delivery` | Hayır (`"invite"` varsayılan) | Aşağıya bkz. |
+
+**Yetki düzeyi hakkında:** Bu akışla oluşturulan kullanıcının rolü her zaman **sabit `admin`** — süper admin bunu parametre olarak seçmiyor, çünkü bu akışın tek amacı "tenant'ın ilk ve tek yetkilisini" kurmak. Daha ince roller (`job_level_id`, departman bazlı yetkiler) [Ekip Daveti](/use-cases/team-invitation) ile sonradan eklenen üyelerde devreye girer — ilk admin için henüz gerekli değil, kendi ekibini o zaten yönetecek.
+
 ## İki teslimat şekli
 
 `delivery` alanı, firma yetkilisinin ilk erişimi nasıl alacağını belirler — süper admin duruma göre (e-posta mı ulaşır, telefonda mı iletiliyor) seçer:
@@ -41,6 +56,29 @@ Bu endpoint **genel kullanıma açık değil** — sadece platform'un kendi `is_
 
 İki modda da **aynı** `Users` kaydı (`role=admin`) oluşuyor — fark sadece "ilk şifre nereden geliyor". İlk çalışanı davet eden mekanizma ile ilk admin'i oluşturan mekanizma bu sayede **tek kod yolunu** paylaşıyor, ayrı bir "register" akışı bakımda tutulmuyor.
 
+## Response — durum kodu ve neden token dönmüyor
+
+Her iki modda da HTTP durumu **`201 Created`** — yeni bir tenant kaynağı doğduğu için `200 OK` değil. Response'ta **access/refresh token yok**: bu istek, kimliğini henüz kanıtlamamış bir kullanıcı için kayıt açıyor — token, ancak gerçek kimlik doğrulamasından (`/auth/login` ya da `/auth/accept-invite` sonrası login) geçince üretilir. `message_code`, i18n standardımıza göre ([coding-standards](/guides/coding-standards)) zaten "başarıyla oluşturuldu" anlamına geliyor — ayrıca bir `"success": true` alanı eklemek gereksiz tekrar olurdu.
+
+```json title="201 — delivery: invite"
+{
+  "tenant_id": "tn_3d9f21",
+  "user_id": "usr_8f2a1c",
+  "message_code": "admin.tenant.invite_sent"
+}
+```
+
+```json title="201 — delivery: temp_password"
+{
+  "tenant_id": "tn_3d9f21",
+  "user_id": "usr_8f2a1c",
+  "temp_password": "kJ8#mP2xQ",
+  "message_code": "admin.tenant.created_with_temp_password"
+}
+```
+
+`temp_password` sadece bu tek response'ta, sadece bu modda döner — hiçbir yerde (log, DB) düz metin olarak saklanmaz; `Users.password_hash` her zaman hash'lenmiş hâliyle yazılır.
+
 ## Akış
 
 ```mermaid
@@ -50,7 +88,7 @@ sequenceDiagram
     participant DB
     actor Yetkili as Firma Yetkilisi
 
-    SA->>Auth: POST /admin/tenants {company_name, admin_email, delivery}
+    SA->>Auth: POST /admin/tenants {company_name, plan_id, admin_email, admin_first_name, admin_last_name, delivery}
     Auth->>Auth: permission_guard — çağıran gerçekten süper admin mi?
     Auth->>DB: email zaten kayıtlı mı kontrol et (global, tenant'tan bağımsız)
     alt e-posta zaten kayıtlı
@@ -80,6 +118,8 @@ Tenant ve ilk kullanıcı **tek bir DB transaction'ında** oluşturulur — biri
 | Çağıran süper admin değil | `403 AuthorizationError`, `code: auth.super_admin_required` |
 | E-posta zaten kayıtlı | `409 ConflictError`, `code: auth.email_already_registered` — e-posta tüm tenant'lar genelinde tekildir |
 | `company_name` boş | `422 ValidationError` — tenant'sız kullanıcı oluşturulamaz |
+| `plan_id` geçersiz/pasif bir plana işaret ediyor | `422 ValidationError`, `code: admin.invalid_plan` |
+| `admin_first_name`/`admin_last_name` boş | `422 ValidationError` — isimsiz kullanıcı oluşturulamaz |
 | `delivery = "temp_password"` ama admin şifreyi hiç değiştirmeden uzun süre kullanıyor | Henüz ele alınmadı — bkz. [Edge Case'ler](/edge-cases) adayı: geçici şifre için zorunlu son kullanma süresi |
 
 ## Sırada ne var
