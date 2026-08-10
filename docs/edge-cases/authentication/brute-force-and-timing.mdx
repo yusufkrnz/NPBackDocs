@@ -1,0 +1,45 @@
+---
+title: Brute-Force ve Timing Attack
+sidebar_position: 1
+description: Login endpoint'inde rate limiting ve sabit-zamanlı yanıt eksikliği — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Brute-Force ve Timing Attack
+
+[Login ve token oluşturma](/use-cases/login-and-token-issuance)'daki akış, "kullanıcı yok" ile "şifre yanlış" için **aynı hata mesajını** döndürerek user enumeration'ı engelliyor — doğru bir karar. Ama bu tek başına yeterli değil: aşağıdaki 2 case, aynı korumanın **deneme sayısı** ve **yanıt süresi** boyutlarında da uygulanması gerektiğini gösteriyor.
+
+## EDGE-CASE-032: Login'de Rate Limiting Yok — Brute-Force Korumasız
+
+**Risk: Yüksek.** `/auth/login`'e art arda kaç yanlış şifre denemesi yapılabileceğine dair bir sınır yok. Bu, [Guard Mimarisi](/guards)'ndeki `rate_limit_guard`'dan **farklı** bir problem — o guard kimliklenmiş bir `tenant_id` varsayıyor, ama login isteğinde henüz kimse kimliklenmemiş; sınırlama email ve/veya IP bazlı olmalı.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[1, 6]}
+  code={`# /auth/login'e saniyede yüzlerce istek atılabilir, hiçbir engel yok
+for password in common_passwords_list:
+    response = post("/auth/login", {"email": "admin@hedef.com", "password": password})
+    if response.status_code == 200:
+        break
+# Guard zincirinde bu isteği durduracak bir email/IP bazlı rate limit adımı yok
+# -> credential stuffing / brute-force saldırısı sınırsız denenebilir`}
+/>
+
+## EDGE-CASE-033: Timing Attack — "Kullanıcı Yok" Yanıtı Ölçülebilir Şekilde Daha Hızlı
+
+**Risk: Orta-Yüksek.** Aynı hata mesajı dönse bile, kullanıcı bulunamadığında `bcrypt`/`argon2` karşılaştırması hiç çalıştırılmazsa, yanıt süresi kayıtlı bir e-posta için daha **yavaş** (hash karşılaştırması gerçekten çalıştı), kayıtlı olmayan bir e-posta için daha **hızlı** (karşılaştırma hiç başlamadı) olur. Saldırgan, mesaj metnine değil **yanıt süresine** bakarak hangi e-postaların sistemde kayıtlı olduğunu öğrenebilir.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[2, 7]}
+  code={`user = db.users.find_one({"email": email})
+if not user:
+    raise AuthenticationError(code="auth.invalid_credentials")  # hızlı — hash hiç çalışmadı
+
+if not bcrypt.checkpw(password, user["password_hash"]):        # yavaş — gerçek hash karşılaştırması
+    raise AuthenticationError(code="auth.invalid_credentials")
+
+# İki dal FARKLI sürede tamamlanıyor — mesaj aynı olsa da süre farkı ölçülebilir
+# Doğrusu: user bulunamasa bile dummy bir bcrypt.checkpw() çalıştırıp süreyi sabitlemek`}
+/>

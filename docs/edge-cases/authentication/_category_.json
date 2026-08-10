@@ -1,0 +1,9 @@
+{
+  "label": "Authentication",
+  "position": 10,
+  "link": {
+    "type": "generated-index",
+    "slug": "/edge-cases/authentication",
+    "description": "Login/token akışında, kimliklenmiş bir tenant/kullanıcı olmadan önce (pre-auth) ortaya çıkan uç durumlar."
+  }
+}

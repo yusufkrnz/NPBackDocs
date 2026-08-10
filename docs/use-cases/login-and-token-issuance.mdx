@@ -81,3 +81,10 @@ Client `/auth/logout`'a refresh token'ı gönderir, Auth Service ilgili kaydı `
 ## Güvenlik notu
 
 Adım 3 ve 5'te "kullanıcı yok" ile "şifre yanlış" durumlarının aynı hata mesajını dönmesi kasıtlıdır — aksi hâlde bir saldırgan, hangi e-postaların sistemde kayıtlı olduğunu deneme-yanılma ile (user enumeration) öğrenebilir.
+
+:::warning Bu tek başına yeterli değil — 2 açık nokta
+Aynı mesajı dönmek, **mesaj metni** üzerinden user enumeration'ı kapatıyor ama iki farklı boyut hâlâ açık, henüz çözülmedi (bkz. [Edge Case'ler — Authentication](/edge-cases/authentication)):
+
+- **Rate limiting yok** — `/auth/login`'e email/IP bazlı bir deneme sınırı yok, brute-force/credential-stuffing sınırsız denenebilir.
+- **Timing attack** — kullanıcı bulunamadığında adım 4'teki `bcrypt`/`argon2` karşılaştırması hiç çalışmıyor, bu da yanıt süresini ölçülebilir şekilde kısaltıyor; saldırgan mesaj yerine **süreye** bakarak enumeration yapabilir. Doğrusu: kullanıcı bulunamasa bile dummy bir hash karşılaştırması çalıştırıp süreyi sabitlemek.
+:::
