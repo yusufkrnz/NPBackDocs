@@ -1,0 +1,65 @@
+---
+title: Genel Bakış
+slug: /services/platform-admin
+sidebar_position: 1
+description: Platform ekibinin tenant provisioning, paket ve kullanım takibi için kullandığı iç servis ve panel — MVP kapsamı.
+---
+
+# Platform Admin Service
+
+## Sorumluluk
+
+Tenant'ların **oluşturulması** (bkz. [Tenant Oluşturma](/use-cases/user-registration)) ve platform ekibinin tenant'ları **görüntülemesi/takip etmesi**. Tenant kullanıcılarının kullandığı hiçbir endpoint'i (guard zincirini, `tenant_id` izolasyonunu) paylaşmaz — tamamen ayrı bir yetki düzeyi, ayrı bir endpoint grubu (`/admin/...`).
+
+Bu servis + ona eşlik eden küçük bir panel, platform ekibinin (biz) günlük işini kapsar: satış sonrası tenant açmak, hangi paketin satıldığını kaydetmek, kullanım verisine bakmak. **MVP kapsamı budur** — geri bildirim toplama ve tenant admin'lerine mesaj gönderme gibi daha büyük özellikler bilinçli olarak dışarıda tutuldu (bkz. aşağıda "Kapsam dışı").
+
+## Bağımlılıklar
+
+- `Users.is_platform_admin` — yeni bir boolean kolon; platform ekibi hesapları migration/seed ile elle işaretlenir, bunu açan bir self-servis akış **yok**
+- `Tenants`, `subscription_plans` (paket tanımı — [databaseschema](https://yusufkrnz.github.io/databaseschema/postgres/platform/subscription-plans))
+- `tenant_token_usage`, `llm_call_log` (kullanım verisi — [Maliyet Yönetimi](/cost-management))
+- [Guard Mimarisi](/guards)'ndeki `permission_guard` — bu servisin **tüm** endpoint'lerinde çalışır, `is_platform_admin = false` olan hiçbir istek buradan geçemez
+
+## Yetki kontrolü
+
+Tenant içi rollerden (`admin`/`member`) tamamen bağımsız, tek bir kontrol:
+
+```
+if not current_user.is_platform_admin:
+    raise AuthorizationError(code="admin.platform_access_required")
+```
+
+Bir tenant'ın `admin`'i olmak, platform admin olmakla **hiçbir ilişkisi yoktur** — ikisi ayrı yetki düzlemi.
+
+## Endpoint'ler (MVP)
+
+| Method | Path | Açıklama | Detay |
+|---|---|---|---|
+| <span className="badge badge--warning">POST</span> | `/admin/tenants` | Yeni tenant + ilk admin kullanıcısını oluşturur | [Tenant Oluşturma](/use-cases/user-registration) |
+| <span className="badge badge--info">GET</span> | `/admin/tenants` | Tenant listesi (panel — Tenant'lar sayfası) | — |
+| <span className="badge badge--info">GET</span> | `/admin/tenants/{id}` | Tek tenant detayı: plan, admin bilgisi, özet kullanım | — |
+| <span className="badge badge--info">GET</span> | `/admin/tenants/{id}/usage` | Tenant'ın zaman içindeki token kullanımı (panel — Kullanım Takibi sayfası) | [Maliyet Yönetimi](/cost-management) |
+| <span className="badge badge--info">GET</span> | `/admin/plans` | Tanımlı paketleri listeler (panel — Paketler sayfası) | — |
+| <span className="badge badge--warning">POST</span> | `/admin/plans` | Yeni paket tanımlar (`plan_id` üretmenin tek yolu — tenant oluşturmadan önce en az bir paket var olmalı) | — |
+
+Paket **düzenleme** (`PUT /admin/plans/{id}`) bilinçli olarak MVP'de yok — şimdilik paketler nadiren değişiyor, ihtiyaç çıkınca eklenir.
+
+## Panel sayfaları (MVP — 4 sayfa)
+
+1. **Dashboard** — toplam/aktif tenant sayısı, bu ay oluşturulan tenant, toplam token tüketimi (tek bakışta özet)
+2. **Tenant'lar** — liste + detay + yeni tenant oluşturma formu (`POST /admin/tenants`'ı çağırır)
+3. **Paketler** — tanımlı paketlerin listesi + yeni paket ekleme formu
+4. **Kullanım Takibi** — bir tenant seçilince zaman serisi grafik (token/ay)
+
+Panelin kendisi ayrı bir küçük React uygulaması (ana ürünün frontend'inden bağımsız, sadece bu `/admin/...` endpoint'lerini tüketir) — hazır bir admin-panel kütüphanesi (AdminJS vb.) kullanılmıyor çünkü dil uyumsuzluğu var (bkz. aşağıdaki not) ve özel görselleştirme (grafik) gerektiriyor.
+
+:::info Neden hazır bir admin panel kütüphanesi değil
+AdminJS gibi araçlar Node.js ekosistemine (TypeORM/Prisma gibi JS ORM'lere) bağımlı — Python/FastAPI/SQLAlchemy ile doğrudan konuşmuyorlar. `sqladmin` gibi Python-native alternatifler çıplak CRUD için uygun ama kullanım grafiği gibi özel görselleştirmeyi desteklemiyor. Bu ölçekte (4 sayfa, çoğu zaten var olan veriyi gösteriyor) ince bir özel panel, üçüncü parti bir aracı öğrenip bükmekten daha az iş.
+:::
+
+## Kapsam dışı (şimdilik) — vizyon kaybolmasın diye not
+
+- **Geri Bildirim** — tenant admin'in ürün içinde bir "öneri gönder" formu doldurması, platform panelinde listelenmesi. Akış tenant-admin tarafından başlatılır. Yeni bir `feedback` tablosu + ana ürüne küçük bir form gerekir.
+- **Mesajlaşma** — platformdan tenant admin'lerine e-posta ile duyuru/mesaj gönderme (mevcut e-posta altyapısı üzerinden). Yeni bir mesaj geçmişi tablosu gerekir.
+
+İkisi de MVP'nin bir parçası değil — temel panel (tenant + paket + kullanım) oturduktan sonra, gerçek ihtiyaç görülünce eklenir.

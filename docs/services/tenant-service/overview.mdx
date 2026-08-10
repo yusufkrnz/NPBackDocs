@@ -11,7 +11,7 @@ description: Tenant Service'in sorumluluğu, bağımlılıkları ve endpoint'ler
 
 Tenant (şirket) kaydının kendisi, ekibe yeni üye davet etme ve daveti kabul etme. [Auth Service](/services/auth-service) "bu kullanıcı kim" sorusuna cevap verirken, Tenant Service "bu kullanıcı **hangi şirkete ait** ve o şirkete başka kim eklenebilir" sorusuna cevap verir.
 
-Tenant, [Kayıt olma](/use-cases/user-registration) sırasında ilk kullanıcıyla birlikte oluşturulur — bu servisin kendi başına bir "tenant oluştur" endpoint'i yoktur, çünkü tenant'sız bir kullanıcı (veya kullanıcısız bir tenant) sistemde var olamaz.
+Tenant'ın **ilk** oluşturulması bu serviste değil, [Platform Admin Service](/services/platform-admin)'de yaşıyor (`POST /admin/tenants`, süper admin-only — bkz. [Tenant Oluşturma](/use-cases/user-registration)) — çünkü bu, kendi kendine kayıt olan bir tenant kullanıcısı değil, platform ekibinin tetiklediği bir provisioning işlemi. Tenant Service, tenant **zaten var olduktan sonraki** ekip büyütme işini (davet) yönetir.
 
 ## Bağımlılıklar
 
