@@ -16,21 +16,22 @@ Aşağıdaki sayfaların ([Kayıt olma](/use-cases/user-registration), [Login](/
 ```mermaid
 sequenceDiagram
     actor Satış as Satış Ekibi
+    actor SA as Süper Admin (biz)
     actor Admin as Firma Yetkilisi
     actor Calisan as Firma Çalışanı
     participant Auth as Auth Service
     participant DB
 
-    Note over Satış,Admin: 1) Satış görüşmesi — sistem dışı, teknik bir adım değil
-    Satış->>Admin: Anlaşma sağlanır
+    Note over Satış,SA: 1) Satış görüşmesi — sistem dışı, teknik bir adım değil
+    Satış->>SA: Anlaşma sağlanır
 
-    Note over Admin,DB: 2) Kayıt — tenant + admin birlikte doğar
-    Admin->>Auth: POST /auth/register {company_name, email, password}
+    Note over SA,DB: 2) Süper admin tenant + ilk admin'i oluşturur (self-servis değil)
+    SA->>Auth: POST /admin/tenants {company_name, admin_email, delivery}
     Auth->>DB: Tenants + Users (role=admin) oluşturulur
-    Auth-->>Admin: doğrulama e-postası gönderilir
+    Auth-->>Admin: davet e-postası YA DA geçici şifre (delivery'e göre)
 
-    Note over Admin: 3) E-posta doğrulama
-    Admin->>Auth: POST /auth/verify-email {token}
+    Note over Admin: 3) İlk erişim — davet linki ile şifre belirleme
+    Admin->>Auth: POST /auth/accept-invite {token, password}
     Auth-->>Admin: hesap aktifleşir
 
     Note over Admin,Auth: 4) İlk login — admin
@@ -53,15 +54,16 @@ sequenceDiagram
 | # | Adım | Kim tetikler | Endpoint | Detay |
 |---|---|---|---|---|
 | 1 | Satış görüşmesi | Satış ekibi | — (sistem dışı) | — |
-| 2 | Kayıt — tenant + admin birlikte oluşur | Firma yetkilisi | `POST /auth/register` | [Kayıt olma](/use-cases/user-registration) |
-| 3 | E-posta doğrulama | Firma yetkilisi | `POST /auth/verify-email` | [E-posta Doğrulama](/services/auth-service/email-verification) |
+| 2 | Tenant + ilk admin oluşturulur | **Süper admin** (firma yetkilisi değil) | `POST /admin/tenants` | [Tenant Oluşturma](/use-cases/user-registration) |
+| 3 | İlk erişim — şifre belirleme | Firma yetkilisi | `POST /auth/accept-invite` (`delivery="invite"` ise) | [Tenant Oluşturma](/use-cases/user-registration) |
 | 4 | İlk login (admin) | Firma yetkilisi | `POST /auth/login` | [Login ve token oluşturma](/use-cases/login-and-token-issuance) |
 | 5 | Ekip daveti | Admin | `POST /team/invitations` → `POST /auth/accept-invite` | [Ekip Daveti](/use-cases/team-invitation) |
 | 6 | Çalışan login | Firma çalışanı | `POST /auth/login` (adım 4 ile **aynı** endpoint) | [Login ve token oluşturma](/use-cases/login-and-token-issuance) |
 
-## Kritik nokta — tek login ekranı, iki farklı köken
+## Kritik noktalar
 
-Adım 4 ve adım 6, **aynı** `POST /auth/login` endpoint'ini çağırıyor — sistem, bir kullanıcının "ilk admin mi yoksa sonradan davet edilen mi" olduğunu login anında hiç ayırt etmiyor, ayrım sadece `Users.role` alanında duruyor. Bu kasıtlı: login akışını tek, basit ve tutarlı tutuyor; "nasıl üye oldun" bilgisi sadece kayıt/davet aşamasında önemli, login aşamasında değil.
+- **Tek login ekranı, iki farklı köken:** Adım 4 ve adım 6, **aynı** `POST /auth/login` endpoint'ini çağırıyor — sistem, bir kullanıcının "ilk admin mi yoksa sonradan davet edilen mi" olduğunu login anında hiç ayırt etmiyor, ayrım sadece `Users.role` alanında duruyor.
+- **Tek davet mekanizması, iki tetikleyici:** Adım 3 ve adım 5'teki `POST /auth/accept-invite` **aynı kod yolu** — farkı sadece kimin daveti gönderdiği (süper admin vs. tenant admin'i). Ayrı bir "self-servis register" akışı bakımda tutulmuyor.
 
 ## Kapsam dışı (bilinçli sınır)
 

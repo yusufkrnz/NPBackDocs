@@ -35,10 +35,12 @@ Diğer tüm servisler dolaylı bağımlıdır: korumalı bir endpoint'e gelen he
 
 | Method | Path | Açıklama | Detay |
 |---|---|---|---|
-| <span className="badge badge--success">POST</span> | `/auth/register` | Yeni kullanıcı oluşturur | [Kayıt olma](/use-cases/user-registration) |
+| <span className="badge badge--warning">POST</span> | `/admin/tenants` | **Süper admin-only** — yeni tenant + ilk admin kullanıcısını oluşturur | [Tenant Oluşturma](/use-cases/user-registration) |
+| <span className="badge badge--success">POST</span> | `/auth/accept-invite` | Davet token'ı ile ilk şifreyi belirler (hem ilk admin hem sonraki çalışanlar için ortak) | [Ekip Daveti](/use-cases/team-invitation) |
 | <span className="badge badge--success">POST</span> | `/auth/login` | E-posta + şifre ile giriş, access + refresh token döner | [login-and-token-issuance](/use-cases/login-and-token-issuance) |
 | <span className="badge badge--success">POST</span> | `/auth/refresh` | Geçerli bir refresh token ile yeni access token üretir | [Token Design](/services/auth-service/token-design) |
 | <span className="badge badge--success">POST</span> | `/auth/logout` | Refresh token'ı iptal eder | [Token Design](/services/auth-service/token-design) |
+| <span className="badge badge--success">POST</span> | `/auth/change-password` | `must_change_password=true` durumundaki zorunlu şifre değişimi | [Tenant Oluşturma](/use-cases/user-registration) |
 | <span className="badge badge--success">POST</span> | `/auth/forgot-password` | Şifre sıfırlama e-postası tetikler | [Şifre Sıfırlama](/services/auth-service/password-reset) |
 | <span className="badge badge--success">POST</span> | `/auth/reset-password` | Sıfırlama token'ı ile yeni şifre belirler | [Şifre Sıfırlama](/services/auth-service/password-reset) |
 | <span className="badge badge--success">POST</span> | `/auth/verify-email` | E-posta doğrulama token'ını onaylar | [E-posta Doğrulama](/services/auth-service/email-verification) |

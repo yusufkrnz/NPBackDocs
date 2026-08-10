@@ -1,7 +1,7 @@
 ---
-title: Kayıt olma
+title: Tenant Oluşturma (Süper Admin)
 sidebar_position: 3
-description: Yeni tenant + ilk admin kullanıcının birlikte oluşturulması — validasyon, e-posta doğrulama tetikleme, hata durumları.
+description: Yeni tenant + ilk admin kullanıcının süper admin tarafından oluşturulması — self-servis değil, davet/geçici şifre ile teslim.
 wide_toc: true
 ---
 
@@ -11,63 +11,77 @@ import CodeRail from '@site/src/components/CodeRail';
 <CodeRail>
   <ApiExample
     method="POST"
-    path="/auth/register"
+    path="/admin/tenants"
+    requestHeaders={{ Authorization: 'Bearer <süper-admin-token>' }}
     request={{
       company_name: 'Akgün Ticaret',
-      email: 'ayse@akguntic.com',
-      password: '••••••••',
-      full_name: 'Ayşe Yılmaz',
+      admin_email: 'ayse@akguntic.com',
+      delivery: 'invite',
     }}
-    response={{ id: 'usr_8f2a1c', tenant_id: 'tn_3d9f21', message_code: 'auth.register.verification_sent' }}
+    response={{ tenant_id: 'tn_3d9f21', user_id: 'usr_8f2a1c', message_code: 'admin.tenant.invite_sent' }}
   />
 </CodeRail>
 
-# Kayıt olma
+# Tenant Oluşturma (Süper Admin)
 
-Bu endpoint **bireysel** kayıt değildir — çağrıldığında hem yeni bir **tenant** (şirket) hem de o tenant'ın ilk kullanıcısı **admin rolüyle** birlikte oluşturulur. NewPortal bir B2B SaaS olduğu için sisteme "boşluğa" kayıt olan tek bir kullanıcı yoktur; her kullanıcı bir tenant'a bağlıdır — ya burada yeni bir tenant açarak (ilk kişi), ya da [Ekip Daveti](/use-cases/team-invitation) ile var olan bir tenant'a katılarak.
+:::info Karar değişikliği
+Bu akış daha önce **self-servis kayıt** (`POST /auth/register`, kullanıcı kendi formunu dolduruyordu) olarak tasarlanmıştı. Gerçek iş modeli farklı çıktı: satış görüşmesi sonrası **süper admin (platform ekibi)** tenant'ı ve ilk admin kullanıcısını oluşturuyor — firma kendi kaydını açmıyor. Bkz. [Multi-tenancy](/guides/multi-tenancy) için izolasyon etkisi.
+:::
 
-Yeni hesap `is_active = false` ile oluşturulur — e-posta doğrulanana kadar login engellenir (bkz. [E-posta Doğrulama](/services/auth-service/email-verification)). Yanıt gerçek bir "hoş geldin" metni değil, i18n `message_code`'u döner (bkz. [coding-standards](/guides/coding-standards)).
+Bu endpoint **genel kullanıma açık değil** — sadece platform'un kendi `is_super_admin` yetkisine sahip kullanıcıları çağırabilir (bkz. [Guard Mimarisi](/guards) — `permission_guard`). Çağrıldığında hem yeni bir **tenant** (şirket) hem de o tenant'ın ilk kullanıcısı **admin rolüyle** birlikte oluşturulur. NewPortal bir B2B SaaS olduğu için sisteme "boşluğa" kayıt olan tek bir kullanıcı yoktur; her kullanıcı bir tenant'a bağlıdır — ya süper admin burada yeni bir tenant açar (ilk kişi), ya da [Ekip Daveti](/use-cases/team-invitation) ile var olan bir tenant'a katılır.
+
+## İki teslimat şekli
+
+`delivery` alanı, firma yetkilisinin ilk erişimi nasıl alacağını belirler — süper admin duruma göre (e-posta mı ulaşır, telefonda mı iletiliyor) seçer:
+
+| `delivery` | Ne olur | Firma yetkilisi ne yapar |
+|---|---|---|
+| `"invite"` (varsayılan) | [Ekip Daveti](/use-cases/team-invitation)'ndeki **aynı** davet mekanizması tetiklenir | E-postadaki linke tıklar, `POST /auth/accept-invite {token, password}` ile kendi şifresini belirler |
+| `"temp_password"` | Response'ta geçici bir şifre döner | Süper admin bunu telefon/yüz yüze iletir; ilk `POST /auth/login`'de `must_change_password: true` döner, `POST /auth/change-password` zorunlu |
+
+İki modda da **aynı** `Users` kaydı (`role=admin`) oluşuyor — fark sadece "ilk şifre nereden geliyor". İlk çalışanı davet eden mekanizma ile ilk admin'i oluşturan mekanizma bu sayede **tek kod yolunu** paylaşıyor, ayrı bir "register" akışı bakımda tutulmuyor.
 
 ## Akış
 
 ```mermaid
 sequenceDiagram
-    participant Client
+    participant SA as Süper Admin
     participant Auth as Auth Service
     participant DB
+    actor Yetkili as Firma Yetkilisi
 
-    Client->>Auth: POST /auth/register {company_name, email, password, full_name}
+    SA->>Auth: POST /admin/tenants {company_name, admin_email, delivery}
+    Auth->>Auth: permission_guard — çağıran gerçekten süper admin mi?
     Auth->>DB: email zaten kayıtlı mı kontrol et (global, tenant'tan bağımsız)
     alt e-posta zaten kayıtlı
-        Auth-->>Client: 409 ConflictError (code: auth.email_already_registered)
-    else şifre kurala uymuyor
-        Auth-->>Client: 422 ValidationError (code: auth.password_too_weak)
+        Auth-->>SA: 409 ConflictError (code: auth.email_already_registered)
     else geçerli
         Auth->>DB: Tenants kaydı oluştur (tek transaction içinde)
-        Auth->>Auth: password_hash üret (bcrypt)
-        Auth->>DB: Users (tenant_id=yeni tenant, role=admin, is_active=false) oluştur
-        Auth->>DB: e-posta doğrulama token'ı oluştur
-        Auth-->>Client: 201 {id, tenant_id, message_code}
+        Auth->>DB: Users (tenant_id=yeni tenant, role=admin) oluştur
+
+        alt delivery = "invite"
+            Auth->>DB: davet token'ı oluştur (status=invited)
+            Auth-->>Yetkili: davet e-postası
+            Yetkili->>Auth: POST /auth/accept-invite {token, password}
+            Auth->>DB: password_hash kaydet, status=active
+        else delivery = "temp_password"
+            Auth->>Auth: geçici şifre üret, password_hash kaydet (must_change_password=true)
+            Auth-->>SA: 201 {tenant_id, user_id, temp_password}
+        end
     end
 ```
 
 Tenant ve ilk kullanıcı **tek bir DB transaction'ında** oluşturulur — biri başarılı diğeri başarısız olup yarım kalmış bir tenant (kullanıcısız şirket kaydı) asla ortada kalmaz.
 
-## Şifre kuralı
-
-- En az 8 karakter, en az bir harf ve bir rakam
-- Kasıtlı olarak agresif bir karmaşıklık kuralı (özel karakter zorunluluğu vb.) **yok** — kayıt sürtünmesini artırmadan yeterli gücü sağlamak amaçlanıyor; gerçek güvenlik yükü zaten [bcrypt](/guides/libraries)'in kendisinde
-- Kural ihlali `ValidationError` (422) olarak, `code: "auth.password_too_weak"` ile döner — hangi kuralın ihlal edildiği `params` içinde belirtilir (ör. `{"min_length": 8}`)
-
 ## Hata / edge-case senaryoları
 
 | Senaryo | Sonuç |
 |---|---|
-| E-posta zaten kayıtlı | `409 ConflictError`, `code: auth.email_already_registered` — e-posta tüm tenant'lar genelinde tekildir, aynı e-posta iki farklı tenant'ta kullanıcı olamaz |
-| Şifre kurala uymuyor | `422 ValidationError`, `code: auth.password_too_weak` |
-| `email` formatı geçersiz | `422` — Pydantic şema seviyesinde reddedilir, servise hiç ulaşmaz (bkz. [Merkezi Hata Yönetimi](/guides/error-handling)) |
+| Çağıran süper admin değil | `403 AuthorizationError`, `code: auth.super_admin_required` |
+| E-posta zaten kayıtlı | `409 ConflictError`, `code: auth.email_already_registered` — e-posta tüm tenant'lar genelinde tekildir |
 | `company_name` boş | `422 ValidationError` — tenant'sız kullanıcı oluşturulamaz |
+| `delivery = "temp_password"` ama admin şifreyi hiç değiştirmeden uzun süre kullanıyor | Henüz ele alınmadı — bkz. [Edge Case'ler](/edge-cases) adayı: geçici şifre için zorunlu son kullanma süresi |
 
 ## Sırada ne var
 
-Kayıt başarılı olduktan sonra kullanıcı henüz giriş yapamaz — e-posta doğrulaması gerekir (bkz. [E-posta Doğrulama](/services/auth-service/email-verification)), sonra [Login ve token oluşturma](/use-cases/login-and-token-issuance) akışı devreye girer. Admin, giriş yaptıktan sonra ekip arkadaşlarını [Ekip Daveti](/use-cases/team-invitation) ile aynı tenant'a ekleyebilir.
+Firma yetkilisi giriş yaptıktan sonra (bkz. [Login ve token oluşturma](/use-cases/login-and-token-issuance)) ekip arkadaşlarını [Ekip Daveti](/use-cases/team-invitation) ile aynı tenant'a ekleyebilir — bu noktadan sonra süper admin sürece hiç girmez. Süper admin tarafının kendi paneli (tenant listesi, plan/kullanım takibi, provisioning geçmişi) ayrı bir konu — henüz dokümante edilmedi, ihtiyaç netleşince ayrı bir bölüm olarak eklenecek.

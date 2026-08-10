@@ -6,7 +6,7 @@ description: Tenant izolasyon stratejisi — shared-schema + tenant_id, ve migra
 
 # Multi-tenancy
 
-NewPortal her müşteriyi (şirketi) bir **tenant** olarak modelliyor. Bu sayfa, tenant'ların veritabanı seviyesinde nasıl izole edildiğini ve bunun migration stratejisini nasıl belirlediğini anlatır — tenant'ın kendisinin nasıl oluşturulduğu için bkz. [Kayıt olma](/use-cases/user-registration).
+NewPortal her müşteriyi (şirketi) bir **tenant** olarak modelliyor. Bu sayfa, tenant'ların veritabanı seviyesinde nasıl izole edildiğini ve bunun migration stratejisini nasıl belirlediğini anlatır — tenant'ın kendisinin nasıl oluşturulduğu (self-servis değil, süper admin tarafından) için bkz. [Tenant Oluşturma](/use-cases/user-registration).
 
 ## Seçilen model: shared-schema + `tenant_id`
 
@@ -30,6 +30,6 @@ Shared-schema seçimi, migration'ı önemli ölçüde basitleştirir: [Alembic](
 
 ## İlgili sayfalar
 
-- [Kayıt olma](/use-cases/user-registration) — tenant'ın ilk oluşturulduğu an
+- [Tenant Oluşturma](/use-cases/user-registration) — tenant'ın ilk oluşturulduğu an (süper admin tarafından)
 - [Ekip Daveti](/use-cases/team-invitation) — var olan bir tenant'a yeni kullanıcı ekleme
 - [Tenant Service](/services/tenant-service) — tenant/davet endpoint referansı

@@ -20,7 +20,7 @@ import CodeRail from '@site/src/components/CodeRail';
 
 # Ekip Daveti
 
-[Kayıt olma](/use-cases/user-registration) sadece **ilk** kullanıcıyı (tenant admin'i) oluşturur. Sonraki her üye bu davet akışıyla eklenir — açık, self-servis bir "register" ile rastgele bir tenant'a katılmak mümkün değildir.
+[Tenant Oluşturma](/use-cases/user-registration) sadece **ilk** kullanıcıyı (tenant admin'i), süper admin tarafından oluşturur. Sonraki her üye bu davet akışıyla eklenir — `POST /auth/accept-invite`, ilk admin'in de kullandığı **aynı** endpoint; açık bir "register" ile rastgele bir tenant'a katılmak mümkün değildir.
 
 ## Akış
 
