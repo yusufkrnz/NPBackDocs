@@ -1,0 +1,59 @@
+---
+title: Client-Side Render Sağlamlığı
+sidebar_position: 2
+description: UI Ağacı'nın client tarafında render edilmesinde tespit edilen 3 uç durum — henüz hiçbiri çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Client-Side Render Sağlamlığı
+
+[UI Ağacı](/ai/ui-tree)'ndaki `renderNode` fonksiyonu backend'in doğruladığı ağacı ekrana basıyor. Aşağıdaki 3 case, bu son adımda — backend'in kontrolünden çıkıp tarayıcıya ulaştıktan sonra — neyin kırılabileceğini gösteriyor.
+
+## EDGE-CASE-027: Desteklenmeyen Prop Sessizce Yok Sayılır
+
+**Risk: Düşük-Orta (çökme yok, görünürlük sorunu).** LLM bir component'in desteklemediği bir prop üretirse (örn. `LineChart`'a `iconKey`), React bu prop'u sessizce yok sayar. Kullanıcı "ikonlu göster" istedi ama ne bir hata ne de bir uyarı görür — özellik sadece çalışmamış olur.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[1, 5]}
+  code={`role_map = {"iconKey": "category_icon"}  # LineChart bu prop'u hiç tanımıyor
+props = {**role_map, "data": real_rows}
+
+<LineChart {...props} />
+# React, component'in kabul etmediği "iconKey" prop'unu sessizce yok sayar
+# Kullanıcı "ikonlu göster" dedi ama hiçbir hata/uyarı olmadan hiçbir şey olmadı`}
+/>
+
+## EDGE-CASE-028: Error Boundary Yok — Bir Node'un Render Hatası Tüm Ağacı Çökertir
+
+**Risk: Yüksek.** `renderNode` recursive olarak tüm ağacı basıyor ama tek bir node'un render sırasında fırlattığı hata (örn. component'in beklemediği bir veri tipi) `try/catch`/`ErrorBoundary` ile izole edilmiyor — React bu durumda **tüm ağacı** unmount eder.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[5, 7]}
+  code={`function renderNode(node, state) {
+  const Component = COMPONENT_REGISTRY[node.type];
+  if (!Component) return null;
+  const props = resolveStateRefs(node.props, state);
+  // Component render sırasında throw ederse (örn. beklenmeyen veri tipi)
+  // hiçbir <ErrorBoundary> ile sarılmamış
+  return <Component {...props} />;
+  // -> tek node'un hatası, dashboard'daki DİĞER 5 component'i de siler
+}`}
+/>
+
+## EDGE-CASE-029: Row Limit Yok — Büyük Veri Seti Tarayıcıyı Kilitleyebilir
+
+**Risk: Orta-Yüksek.** [SQL Guard](/ai/security-model), `SELECT`/tablo/tenant kontrolü yapıyor ama dönebilecek **satır sayısına** bir üst sınır koymuyor. Guard'dan geçen sorgu 200.000 satır dönerse, `DataTable` bunların hepsini tek seferde DOM'a basmaya çalışır.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[2, 5]}
+  code={`real_rows = guard_and_run(sql, tenant_id, user_id, ALLOWED_TABLES)
+# SQL Guard satır sayısını hiç sınırlamıyor — LIMIT yok
+
+render_event = build_render_event(llm_decision, real_rows)
+# real_rows 200.000 satır olabilir — DataTable hepsini tek seferde render etmeye çalışır
+# -> tarayıcı sekmesi donar/çöker`}
+/>

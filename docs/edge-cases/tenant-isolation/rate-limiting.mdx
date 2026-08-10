@@ -1,0 +1,42 @@
+---
+title: Tenant Bazlı Rate Limiting
+sidebar_position: 3
+description: Bir tenant'ın diğerlerini etkileyebilmesi — token_guard tek isteği sınırlıyor ama istek sıklığını sınırlamıyor. Henüz çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Tenant Bazlı Rate Limiting
+
+`token_guard`, [Maliyet Yönetimi](/cost-management)'ndeki bütçe kontrollerinin bir parçası olarak **tek bir isteğin** token bütçesini sınırlıyor. Ama bir tenant'ın **saniyede kaç istek** attığına dair bir sınır guard zincirinde yok — "gürültülü komşu" (noisy neighbor) sorunu.
+
+## EDGE-CASE-031: Tenant Bazlı Rate Limiting Yok — Gürültülü Komşu Sorunu
+
+**Risk: Orta-Yüksek.** Bir tenant (bug'lı bir entegrasyon script'i ya da kötü niyetli bir kullanıcı yüzünden) art arda yüzlerce istek atarsa, bu istekler Bedrock'un kendi rate limit'ine çarpar — bu limit **tüm platform için paylaşılan** bir kaynak olduğundan, tek bir tenant'ın aşırı kullanımı **diğer tüm tenant'ların** isteklerinin de yavaşlamasına/reddedilmesine yol açabilir.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[5, 7]}
+  code={`async def run_guards(ctx):
+    ctx = await tenant_guard(ctx)
+    ctx = await rls_guard(ctx)
+    ctx = await sql_guard(ctx)
+    ctx = await token_guard(ctx)   # sadece TEK isteğin token bütçesini kontrol eder
+    # Bir tenant'ın SANİYEDE/DAKİKADA kaç istek attığına dair bir sınır YOK
+    return ctx
+# Tek bir tenant art arda yüzlerce istek atarsa Bedrock rate limit'ine
+# TÜM platform çarpar — diğer tenant'lar da etkilenir`}
+/>
+
+Guard zincirine eklenmesi gereken adım — `token_guard`'ın hemen yanına, tenant başına istek sıklığını sınırlayan bir katman:
+
+<CodeEditor
+  filename="services/guards/rate_limit_guard.py (öneri — henüz yok)"
+  code={`async def rate_limit_guard(tenant_id: str) -> None:
+    key = f"rate_limit:{tenant_id}"
+    current = await redis.incr(key)
+    if current == 1:
+        await redis.expire(key, 60)  # 60 saniyelik pencere
+    if current > TENANT_REQUESTS_PER_MINUTE:
+        raise RateLimitError(code="tenant.rate_limit_exceeded")`}
+/>

@@ -1,0 +1,38 @@
+---
+title: Action Execution Yetkilendirmesi
+sidebar_position: 2
+description: LLM'in önerdiği aksiyonların çalıştırılmasında RBAC kontrolü eksikliği — henüz çözülmedi.
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+
+# Action Execution Yetkilendirmesi
+
+`action_registry` (bkz. [action_registry](https://yusufkrnz.github.io/databaseschema/postgres/platform/action-registry)), LLM'in "önerebileceği" butonları (`create_task`, `export_pdf`, `delete_deal`…) `risk_level` ve `requires_confirm` alanlarıyla tanımlıyor. Ama bu alanların **dispatch anında gerçekten kontrol edildiği** bir `permission_guard` henüz guard zincirinde yok.
+
+## EDGE-CASE-030: Action Execution İçin RBAC (`permission_guard`) Yok
+
+**Risk: Yüksek.** LLM bir aksiyonu "önerdiğinde", backend bu öneriyi çalıştırmadan önce kullanıcının o aksiyonu gerçekten çalıştırma yetkisi olup olmadığını kontrol etmiyor. `risk_level="high"` olan bir aksiyon (örn. `delete_deal`), sıradan bir kullanıcı tarafından da tetiklenebilir — LLM önerdi diye backend hiç sormadan çalıştırıyor.
+
+<CodeEditor
+  filename="senaryo"
+  highlightLines={[3, 6]}
+  code={`async def dispatch_action(action_name: str, params: dict, user):
+    action = action_registry.get(action_name)  # örn. "delete_deal", risk_level="high"
+    # user'ın bu action'ı çalıştırma YETKİSİ (rol/izin) hiç kontrol edilmiyor
+    return await run_handler(action["handler_ref"], params)
+    # requires_confirm=True olsa bile backend'de zorlanan bir onay adımı yok
+    # -> yetkisiz bir kullanıcı, LLM'in önerdiği yüksek riskli bir aksiyonu çalıştırabilir`}
+/>
+
+Guard zincirine eklenmesi gereken adım — sırası `sql_guard`/`rls_guard` ile aynı mantıkta, LLM'in kararından **sonra**, execution'dan **önce**:
+
+<CodeEditor
+  filename="services/guards/permission_guard.py (öneri — henüz yok)"
+  code={`async def permission_guard(action_name: str, user) -> None:
+    action = action_registry.get(action_name)
+    if not user_has_permission(user, action_name):
+        raise AuthorizationError(code="action.forbidden")
+    if action["requires_confirm"] and not user.confirmed_this_action:
+        raise AuthorizationError(code="action.confirmation_required")`}
+/>
