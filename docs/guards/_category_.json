@@ -1,0 +1,9 @@
+{
+  "label": "Guard Mimarisi",
+  "position": 9,
+  "link": {
+    "type": "generated-index",
+    "slug": "/guards",
+    "description": "Her isteğin geçtiği merkezi guard zinciri — hangi guard, hangi sırada, neyi kontrol ediyor, koda nasıl dökülüyor."
+  }
+}

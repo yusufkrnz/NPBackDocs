@@ -1,0 +1,277 @@
+---
+title: Guard Mimarisi
+sidebar_position: 1
+description: Her isteğin geçtiği merkezi guard zinciri — hangi guard hangi sırada, neyi kontrol ediyor, koda nasıl dökülüyor.
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Guard Mimarisi
+
+Guard'lar şimdiye kadar dağınık geçti: SQL Guard [Güvenlik Modeli](/ai/security-model)'nde, `token_guard` [Maliyet Yönetimi](/cost-management)'nde, `permission_guard`/`rate_limit_guard` [Edge Case'ler](/edge-cases/tenant-isolation)'de öneri olarak. Bu sayfa hepsini **tek, sıralı bir zincir** olarak birleştiriyor — backend'e dönüldüğünde doğrudan koda dökülecek referans burası.
+
+## Neden merkezi bir zincir — sıfırdan icat etmiyoruz
+
+Üç yerleşik pattern'in birleşimi:
+
+- **Chain of Responsibility** — bir isteği, her biri tek bir sorumluluğu olan handler'lar zincirinden geçirmek; herhangi biri reddederse zincir durur. Rate limiting, authentication, authorization, validation gibi adımların sırayla bir pipeline'dan geçmesi klasik bir kullanım alanı.
+- **PDP/PEP ayrımı** (Policy Decision Point / Policy Enforcement Point) — Open Policy Agent'ın temel mimarisi: **karar** ("bu izinli mi?") ile **uygulama** ("burada durdur") ayrı tutulur. Bizim guard'larımız birer PEP; karar kaynakları (RLS policy, `action_registry.risk_level`, `tool_registry` whitelist) birer PDP.
+- **Google Zanzibar** — Google'ın kendi servislerinde kullandığı, tek ve tutarlı bir yetkilendirme kaynağı prensibi: yetki kontrolü her serviste ayrı ayrı icat edilmez, tek merkezi bir sistemden geçer. Bizim `run_guards()` zincirimiz aynı prensibi küçük ölçekte uyguluyor.
+- **FastAPI'nin kendi `Depends()` sistemi** zaten bu pattern için tasarlanmış — her guard'ı bir dependency olarak yazmak, framework'ün diliyle konuşmak demek.
+
+## Tam zincir — sıra, neden bu sırada
+
+| # | Guard | Ne kontrol eder | Maliyet | Ne zaman çalışır |
+|---|---|---|---|---|
+| 1 | `rate_limit_guard` | Tenant'ın istek sıklığı | O(1) — Redis | Her istekte, en başta — en ucuz kontrol, kötüye kullanımı en erken durdur |
+| 2 | `session_guard` | `conversation_id` ↔ `user_id` sahipliği | O(1) — Mongo `_id` lookup | Bir konuşma okunmadan önce |
+| 3 | `tenant_guard` | SQL'e `WHERE tenant_id` enjeksiyonu | O(1) — AST'a tek clause | Her veri sorgusunda |
+| 4 | `rls_guard` | Postgres `SET app.current_tenant` | O(1) — session variable | `tenant_guard`'dan hemen sonra, sorgu çalışmadan önce |
+| 5 | `permission_guard` | RBAC (`action_registry`) | O(1) — lookup | Sadece action-execution isteklerinde (`export_pdf`, `delete_deal`…) |
+| 6 | `catalog_retrieval_guard` | Vector search'te tenant filtresi | Embedding search | Sadece [Catalog / Retrieval](/edge-cases/catalog-retrieval) kullanan isteklerde |
+| 7 | `sql_guard` | `SELECT`-only + tablo whitelist + execute | O(n) — AST parse | Gerçek veri burada doğuyor |
+| 8 | `token_guard` | Context/token bütçesi | O(1) | LLM çağrısından hemen önce |
+| 9 | `component_guard` | UI ağacının şema doğrulaması | Recursive — Pydantic | LLM'in kararı (`render_ui`) çıktıktan **sonra** |
+
+Sıralamanın mantığı: **en ucuz ve en erken "hayır" diyebilecek kontrol en başta** (rate limit, session sahipliği), veri erişimi izolasyonu ortada (tenant/RLS/permission), gerçek iş (SQL, LLM) en sonda, çıktı doğrulaması (component) her şeyden sonra — çünkü doğrulanacak şey (UI ağacı) henüz üretilmemiş olur.
+
+## `run_guards()` — orkestratör
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/__init__.py"
+    code={`async def run_guards(ctx: RequestContext) -> RequestContext:
+    ctx = await rate_limit_guard(ctx)
+    ctx = await session_guard(ctx)
+    ctx = await tenant_guard(ctx)
+    ctx = await rls_guard(ctx)
+
+    if ctx.request_type == "action":
+        ctx = await permission_guard(ctx)
+
+    if ctx.request_type == "query":
+        if ctx.uses_retrieval:
+            ctx = await catalog_retrieval_guard(ctx)
+        ctx = await sql_guard(ctx)
+        ctx = await token_guard(ctx)
+
+    return ctx
+
+# component_guard ayrı çağrılır — LLM'in render_ui kararından SONRA:
+# render_event = component_guard(llm_decision, real_rows)`}
+  />
+</CodeRail>
+
+Zincir sabit sayıda adımdan oluştuğu için maliyeti O(1) amortized kabul edilir — asıl maliyet `sql_guard` içindeki `db.execute` ve `token_guard`'dan sonraki LLM çağrısında, guard'ların kendisinde değil.
+
+## Guard'lar — servis servis
+
+### 1 — `rate_limit_guard`
+
+**Sorumluluk:** Bir tenant'ın saniyede/dakikada kaç istek attığını sınırlamak — gürültülü komşu sorununu önler.
+**Girdi:** `tenant_id`
+**Başarısız olursa:** `RateLimitError(code="tenant.rate_limit_exceeded")`
+**Bağımlılık:** Yok — zincirin ilk adımı
+**İlgili:** [EDGE-CASE-031](/edge-cases/tenant-isolation)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/rate_limit_guard.py"
+    code={`async def rate_limit_guard(ctx: RequestContext) -> RequestContext:
+    key = f"rate_limit:{ctx.tenant_id}"
+    current = await redis.incr(key)
+    if current == 1:
+        await redis.expire(key, 60)
+    if current > TENANT_REQUESTS_PER_MINUTE:
+        raise RateLimitError(code="tenant.rate_limit_exceeded")
+    return ctx`}
+  />
+</CodeRail>
+
+### 2 — `session_guard`
+
+**Sorumluluk:** Okunmak istenen `conversation_id`'nin gerçekten istek atan `user_id`'ye ait olduğunu doğrulamak (IDOR engeli).
+**Girdi:** `conversation_id`, `user_id`
+**Başarısız olursa:** `AuthorizationError(code="ai.conversation_not_found_or_not_yours")`
+**Bağımlılık:** `rate_limit_guard`'dan sonra
+**İlgili:** [EDGE-CASE-014](/edge-cases/conversation-memory), [Dinamik UI'ın Kalıcılığı](/ai/ui-persistence)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/session_guard.py"
+    code={`async def session_guard(ctx: RequestContext) -> RequestContext:
+    if not ctx.conversation_id:
+        return ctx  # yeni konuşma, kontrol edilecek bir şey yok
+    conv = await db.ai_conversations.find_one(
+        {"_id": ctx.conversation_id, "user_id": ctx.user_id}
+    )
+    if not conv:
+        raise AuthorizationError(code="ai.conversation_not_found_or_not_yours")
+    return ctx`}
+  />
+</CodeRail>
+
+### 3 — `tenant_guard`
+
+**Sorumluluk:** Üretilen her SQL'e `tenant_id` filtresini zorla enjekte etmek — LLM'in SQL'ine bu konuda güvenilmez.
+**Girdi:** Ham SQL AST, `tenant_id`
+**Başarısız olursa:** Filtre enjekte edilemiyorsa (parse hatası) `ValueError(code="ai.sql_parse_failed")`
+**Bağımlılık:** `session_guard`'dan sonra
+**İlgili:** [Sorgu Pipeline'ı](/ai/query-pipeline)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/tenant_guard.py"
+    code={`async def tenant_guard(ctx: RequestContext) -> RequestContext:
+    ast = parse_sql(ctx.raw_sql)
+    ctx.safe_sql = inject_tenant_filter(ast, tenant_id=ctx.tenant_id)
+    return ctx`}
+  />
+</CodeRail>
+
+### 4 — `rls_guard`
+
+**Sorumluluk:** Postgres'e `SET app.current_tenant` ile session değişkeni set etmek — DB'nin kendi RLS policy'si bunu okuyup satırları filtreler. Backend kodunun "unutamayacağı" son savunma katmanı.
+**Girdi:** `tenant_id`
+**Başarısız olursa:** Set edilemezse istek reddedilir (fail-closed, fail-open değil)
+**Bağımlılık:** `tenant_guard`'dan hemen sonra, `sql_guard`'dan önce — sıra bozulursa [EDGE-CASE-019](/edge-cases/tenant-isolation) oluşur
+**İlgili:** [EDGE-CASE-015, 019](/edge-cases/tenant-isolation)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/rls_guard.py"
+    code={`async def rls_guard(ctx: RequestContext) -> RequestContext:
+    await db.execute(
+        "SET app.current_tenant = :tenant_id", {"tenant_id": ctx.tenant_id}
+    )
+    return ctx
+
+# Postgres tarafı — backend'in unutamayacağı yer:
+# CREATE POLICY tenant_isolation ON expenses
+#   USING (tenant_id = current_setting('app.current_tenant')::uuid);`}
+  />
+</CodeRail>
+
+### 5 — `permission_guard`
+
+**Sorumluluk:** LLM'in önerdiği bir aksiyonun (`action_registry`), gerçekten çalıştırma yetkisi olan bir kullanıcı tarafından tetiklendiğini doğrulamak (RBAC).
+**Girdi:** `action_name`, `user`
+**Başarısız olursa:** `AuthorizationError(code="action.forbidden")` / `AuthorizationError(code="action.confirmation_required")`
+**Bağımlılık:** Sadece `request_type == "action"` olan isteklerde çalışır
+**İlgili:** [EDGE-CASE-030](/edge-cases/tenant-isolation)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/permission_guard.py"
+    code={`async def permission_guard(ctx: RequestContext) -> RequestContext:
+    action = action_registry.get(ctx.action_name)
+    if not user_has_permission(ctx.user, ctx.action_name):
+        raise AuthorizationError(code="action.forbidden")
+    if action["requires_confirm"] and not ctx.user_confirmed:
+        raise AuthorizationError(code="action.confirmation_required")
+    return ctx`}
+  />
+</CodeRail>
+
+### 6 — `catalog_retrieval_guard`
+
+**Sorumluluk:** Embedding tabanlı katalog aramasında `tenant_id` filtresinin arama **sırasında** (sonradan değil) uygulandığını garanti etmek.
+**Girdi:** `query_embedding`, `tenant_id`
+**Başarısız olursa:** Filtre `$vectorSearch`'ün `filter` parametresine geçmezse istek reddedilir
+**Bağımlılık:** Sadece retrieval kullanan isteklerde
+**İlgili:** [EDGE-CASE-023](/edge-cases/tenant-isolation), [Catalog / Retrieval](/edge-cases/catalog-retrieval)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/catalog_retrieval_guard.py"
+    code={`async def catalog_retrieval_guard(ctx: RequestContext) -> RequestContext:
+    ctx.catalog_candidates = await db.catalog.aggregate([
+        {"$vectorSearch": {
+            "index": "catalog_embedding_idx",
+            "queryVector": ctx.query_embedding,
+            "path": "embedding",
+            "numCandidates": 100,
+            "limit": 15,
+            "filter": {"tenant_id": ctx.tenant_id},  # ARAMANIN İÇİNDE, sonradan değil
+        }},
+    ]).to_list(15)
+    return ctx`}
+  />
+</CodeRail>
+
+### 7 — `sql_guard`
+
+**Sorumluluk:** LLM'in ürettiği SQL'in `SELECT`-only olduğunu ve sadece whitelist'lenmiş tabloları kullandığını doğrulamak, sonra çalıştırmak.
+**Girdi:** `safe_sql` (adım 3'ten), `allowed_tables`
+**Başarısız olursa:** `AuthorizationError(code="ai.sql_not_select")` / `AuthorizationError(code="ai.sql_table_not_allowed")`
+**Bağımlılık:** `rls_guard`'dan sonra
+**İlgili:** [Güvenlik Modeli](/ai/security-model) (tam detay burada)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/sql_guard.py"
+    code={`async def sql_guard(ctx: RequestContext) -> RequestContext:
+    ast = parse_sql(ctx.safe_sql)
+    if ast.statement_type != "SELECT":
+        raise AuthorizationError(code="ai.sql_not_select")
+    if not ast.referenced_tables.issubset(ALLOWED_TABLES):
+        raise AuthorizationError(code="ai.sql_table_not_allowed")
+    ctx.real_rows = await db.execute(ctx.safe_sql).fetchall()
+    return ctx`}
+  />
+</CodeRail>
+
+### 8 — `token_guard`
+
+**Sorumluluk:** LLM çağrısından önce, context'in token bütçesini aşıp aşmadığını kontrol etmek.
+**Girdi:** Hazırlanmış context (katalog + pencereli geçmiş)
+**Başarısız olursa:** `BudgetExceededError(code="ai.token_budget_exceeded")`
+**Bağımlılık:** `sql_guard`'dan sonra, LLM çağrısından hemen önce
+**İlgili:** [Maliyet Yönetimi](/cost-management), [Konuşma Bağlamı ve Token Bütçesi](/ai/conversation-context)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/token_guard.py"
+    code={`async def token_guard(ctx: RequestContext) -> RequestContext:
+    estimated = estimate_tokens(ctx.context)
+    if estimated > MAX_TOKENS_PER_REQUEST:
+        raise BudgetExceededError(code="ai.token_budget_exceeded")
+    return ctx`}
+  />
+</CodeRail>
+
+### 9 — `component_guard`
+
+**Sorumluluk:** LLM'in ürettiği UI ağacını (`render_ui` kararı), catalog'daki Pydantic şemalarına karşı recursive doğrulamak.
+**Girdi:** LLM'in ürettiği ham ağaç, `max_depth`
+**Başarısız olursa:** `ValueError(code="ai.unknown_component")` / `ValueError(code="ai.invalid_nesting")` / `ValueError(code="ai.max_nesting_exceeded")`
+**Bağımlılık:** LLM'in `render_ui` kararından **sonra** — zincirin geri kalanından farklı olarak, girdi kaynağı LLM'in kendisi
+**İlgili:** [UI Ağacı](/ai/ui-tree) (tam `validate_and_resolve` implementasyonu burada)
+
+<CodeRail>
+  <CodeEditor
+    filename="services/guards/component_guard.py"
+    code={`def component_guard(raw_tree: dict, max_depth: int = 6) -> UINode:
+    return validate_and_resolve(raw_tree, max_depth=max_depth)
+    # tam implementasyon: /ai/ui-tree#doğrulama--validate_and_resolve`}
+  />
+</CodeRail>
+
+## Sıradaki adım
+
+Bu sayfa tasarım — `services/guards/` klasörü altında henüz hiçbiri implement edilmedi. Backend'e dönüldüğünde önerilen sıra: önce **rate_limit_guard + session_guard** (en ucuz, en izole, bağımsız test edilebilir), sonra **tenant_guard + rls_guard** (birbirine sıkı bağlı, birlikte test edilmeli), sonra **sql_guard** (zaten [Güvenlik Modeli](/ai/security-model)'nde detaylı tasarlanmış), en son **permission_guard + component_guard** (sırasıyla [UI Ağacı](/ai/ui-tree) ve action-registry'nin implementasyonuna bağlı).
+
+## Referanslar
+
+- **Chain of Responsibility** — istek işleme adımlarını (rate limit, auth, authz, validation) sıralı, her biri tek sorumluluklu handler'lara bölen klasik tasarım deseni.
+- **Open Policy Agent (OPA)** — policy decision (karar) ile policy enforcement (uygulama) ayrımını popülerleştiren açık kaynak policy engine.
+- **Google Zanzibar** — Google'ın servisleri arasında tek, tutarlı bir yetkilendirme kaynağı olarak çalışan merkezi authorization sistemi.
+- **FastAPI `Depends()`** — dependency injection sistemi, guard zincirini framework'ün kendi diliyle ifade etmenin doğal yolu.
+
+Sources:
+- [Comparing OPA/Rego to AWS Cedar and Google Zanzibar](https://www.styra.com/blog/comparing-opa-rego-to-aws-cedar-and-google-zanzibar/)
+- [OPA vs Cedar vs Zanzibar: 2025 Policy Engine Guide](https://www.osohq.com/learn/opa-vs-cedar-vs-zanzibar)
+- [FastAPI/Python Code Sample: API Role-Based Access Control](https://developer.auth0.com/resources/code-samples/api/fastapi/basic-role-based-access-control)
+- [Chain of Responsibility | LLD](https://algomaster.io/learn/lld/chain-of-responsibility)

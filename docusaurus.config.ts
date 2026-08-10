@@ -124,6 +124,10 @@ const config: Config = {
               label: 'Maliyet Yönetimi',
               to: '/cost-management',
             },
+            {
+              label: 'Guard Mimarisi',
+              to: '/guards',
+            },
           ],
         },
       ],
