@@ -54,7 +54,7 @@ Bu endpoint **genel kullanıma açık değil** — sadece platform'un kendi `is_
 | `"invite"` (varsayılan) | [Ekip Daveti](/use-cases/team-invitation)'ndeki **aynı** davet mekanizması tetiklenir | E-postadaki linke tıklar, `POST /auth/accept-invite {token, password}` ile kendi şifresini belirler |
 | `"temp_password"` | Response'ta geçici bir şifre döner | Süper admin bunu telefon/yüz yüze iletir; ilk `POST /auth/login`'de `must_change_password: true` döner, `POST /auth/change-password` zorunlu |
 
-İki modda da **aynı** `Users` kaydı (`role=admin`) oluşuyor — fark sadece "ilk şifre nereden geliyor". İlk çalışanı davet eden mekanizma ile ilk admin'i oluşturan mekanizma bu sayede **tek kod yolunu** paylaşıyor, ayrı bir "register" akışı bakımda tutulmuyor.
+İki modda da **aynı** `Users` kaydı (`role=admin`) oluşuyor — fark sadece "ilk şifre nereden geliyor". İlk çalışanı davet eden mekanizma ile ilk admin'i oluşturan mekanizma bu sayede **tek kod yolunu** paylaşıyor, ayrı bir "register" akışı bakımda tutulmuyor. `"invite"` modunun token üretiminden SMTP gönderimine, linkin hangi domain'e gittiğine kadar tam mekanizması için bkz. [Davet Linki Teslimi](/services/auth-service/invite-delivery).
 
 ## Response — durum kodu ve neden token dönmüyor
 
