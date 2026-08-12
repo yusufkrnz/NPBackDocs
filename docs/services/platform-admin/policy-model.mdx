@@ -1,0 +1,36 @@
+---
+title: Yetki Politikası (RBAC)
+sidebar_position: 2
+description: Platform genelinde tek merkezi izin kataloğu, her tenant'ın kendi panelinden tek tıkla override edebildiği bir mekanizma — zaten şemada var, sadece bağlantısı kurulmamış.
+---
+
+# Yetki Politikası (RBAC)
+
+"Bir tenant admin, kendi çalışanının belirli bir paneli görmesini tek tıkla engelleyebilsin, ama bu global bir varsayılanı bozmasın" — bu ihtiyaç, gerçek şemada **zaten üç tablo ile modellenmiş**, sadece platform admin panelinin bu tabloları nasıl kullanacağı henüz açıklanmamıştı. Bu sayfa o bağlantıyı kuruyor.
+
+## Üç tablo, iki katman
+
+| Tablo | Kapsam | Ne yapar |
+|---|---|---|
+| [`permissions`](https://yusufkrnz.github.io/databaseschema/postgres/platform/permissions) | **Platform**, tek merkezi katalog | "X paneli / Y aksiyonu" diye bir izin **var mı** — `ui_components`/`action_registry`/`tool_registry`'deki gerçek `id`'ye işaret eder |
+| [`roles`](https://yusufkrnz.github.io/databaseschema/postgres/core/roles) | **Tenant-scoped** | Her tenant'ın kendi rolleri (`admin`, `member`...) — başka tenant'la karışmaz |
+| [`role_permissions`](https://yusufkrnz.github.io/databaseschema/postgres/platform/role-permissions) | **Köprü**, `tenant_id` NULL'lanabilir | "Hangi rol, hangi izne sahip" — NULL = global varsayılan, dolu = **o tek tenant'ın override'ı** |
+
+Kritik alan `role_permissions.tenant_id`'nin nullable olması: aynı tabloda hem "herkes için varsayılan" hem "bu tenant için istisna" birlikte yaşıyor, ayrı bir override tablosu icat etmeye gerek yok.
+
+## Somut örnek — "RevenueChart'ı bu tenant'ta gizle"
+
+1. `ui_components` tablosunda `RevenueChart` diye bir kayıt var (platform kataloğu, tüm tenant'lar için ortak)
+2. `permissions` tablosunda `catalog_type='ui', catalog_item_id=<RevenueChart.id>, action='view'` satırı — "RevenueChart'ı görmek izne tabi bir şey" tanımı
+3. `role_permissions`'da global satır: `tenant_id=NULL, role_id=<'member' rolü>, permission_id=<yukarıdaki izin>` — **varsayılan olarak** her tenant'ın `member` rolü bunu görebiliyor
+4. Bir tenant admin kendi panelinden "hayır, benim çalışanlarım görmesin" deyip toggle'ı kapatınca: backend `role_permissions`'a **o tenant'ın `tenant_id`'siyle** yeni bir satır ekliyor (ya da `granted_at`'i güncelliyor) — global varsayılan hiç değişmiyor, sadece bu tek tenant için bir istisna oluşuyor
+5. Yetki kontrolü sorgusu her zaman **önce tenant-özel satırı arar, yoksa global (`tenant_id IS NULL`) satıra düşer** — "en spesifik kural kazanır" prensibi
+
+## Panel tarafı — iki farklı ekran, aynı mekanizma
+
+- **Platform Admin paneli** (`platform.newportal...`): `permissions` kataloğunu yönetir — yeni bir UI component/action platforma eklendiğinde burada tanımlanır. Bu, **tüm tenant'ları etkileyen** bir işlem, sadece süper admin yapabilir.
+- **Tenant'ın kendi admin paneli** (ana ürünün içinde, `role=admin` olan kullanıcı görür): kendi `roles`'unu ve `role_permissions` **override'larını** yönetir — rol × izin matrisi, her hücre bir toggle. Bu, **sadece kendi tenant'ını** etkiler, `permission_guard` (bkz. [Guard Mimarisi](/guards)) bu iki yetki düzeyini birbirine karıştırmaz.
+
+## MVP kapsamı — şimdi ne kadarı gerekli
+
+Şu an (tenant oluşturma + davet aşamasında) bu mekanizmanın **tamamı gerekmiyor** — `roles`/`role_permissions` tabloları var olsun, her yeni tenant'a `admin` ve `member` diye 2 sistem rolü (`is_system_role=true`) otomatik açılsın yeterli. Tenant admin'in kendi panelinden toggle'la override yapabildiği gerçek ekran, [Platform Admin Service](/services/platform-admin) MVP'si (Tenant'lar + Paketler + Kullanım Takibi) oturduktan **sonra** gelir — vizyon burada net, ama bugünün işi değil.

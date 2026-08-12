@@ -53,9 +53,21 @@ Paket **düzenleme** (`PUT /admin/plans/{id}`) bilinçli olarak MVP'de yok — �
 
 Panelin kendisi ayrı bir küçük React uygulaması (ana ürünün frontend'inden bağımsız, sadece bu `/admin/...` endpoint'lerini tüketir) — hazır bir admin-panel kütüphanesi (AdminJS vb.) kullanılmıyor çünkü dil uyumsuzluğu var (bkz. aşağıdaki not) ve özel görselleştirme (grafik) gerektiriyor.
 
-:::info Neden hazır bir admin panel kütüphanesi değil
-AdminJS gibi araçlar Node.js ekosistemine (TypeORM/Prisma gibi JS ORM'lere) bağımlı — Python/FastAPI/SQLAlchemy ile doğrudan konuşmuyorlar. `sqladmin` gibi Python-native alternatifler çıplak CRUD için uygun ama kullanım grafiği gibi özel görselleştirmeyi desteklemiyor. Bu ölçekte (4 sayfa, çoğu zaten var olan veriyi gösteriyor) ince bir özel panel, üçüncü parti bir aracı öğrenip bükmekten daha az iş.
+:::info Neden hazır bir admin panel kütüphanesi değil (tam olarak değil)
+AdminJS gibi araçlar Node.js ekosistemine (TypeORM/Prisma gibi JS ORM'lere) bağımlı — Python/FastAPI/SQLAlchemy ile doğrudan konuşmuyorlar. **Ama** `sqladmin` (Python-native, SQLAlchemy modellerinden otomatik CRUD üretiyor) gerçek bir hızlandırıcı — **Tenant'lar** ve **Paketler** sayfaları için (düz CRUD, özel görselleştirme gerektirmiyor) `sqladmin` kullanılıyor. **Kullanım Takibi**'ndeki zaman serisi grafiği gibi özel görünümler `sqladmin`'in kapsamı dışında, orada ince bir özel view yazılıyor. Yani: mümkün olan yerde hazır araç, gerektiği yerde özel kod — ikisi bir arada.
 :::
+
+## Tenant oluşturma orkestrasyonu — sıralı, ama mikroservis değil
+
+`POST /admin/tenants` tek bir işlem gibi görünse de arka planda 3 farklı sisteme dokunuyor: **Postgres** (tenant + admin user), **Mongo** (`audit_log`'a olay kaydı), **e-posta** (davet linki). [İki DB'ye dikkat](/guards) bölümünde konuştuğumuz gibi bunlar arasında atomic bir transaction yok — ama bu bir mikroservis/dağıtık-sistem problemi değil, tek bir orkestratör fonksiyonun içinde sıralı adımlar:
+
+```
+1. create_tenant_and_admin(...)   # Postgres, TEK transaction — kritik, atomic
+2. log_to_audit("tenant.created")  # Mongo — kritik değil, başarısız olursa retry kuyruğuna düşer
+3. send_invite_or_temp_password()  # e-posta — kritik değil, başarısız olursa "yeniden gönder" butonuyla telafi edilir
+```
+
+Kural basit: **adım 1 başarısız olursa hiçbir şey olmamış sayılır** (transaction rollback). **Adım 2-3 başarısız olursa tenant yine de var olur** — bunlar retry edilebilir, tenant'ı geri almaya değmez. Ayrı bir Saga kütüphanesi/framework'e gerek yok; bu ayrım (hangi adım atomic, hangisi retry'lanabilir) tek bir Python fonksiyonunda try/except ile ifade edilir.
 
 ## Kapsam dışı (şimdilik) — vizyon kaybolmasın diye not
 
