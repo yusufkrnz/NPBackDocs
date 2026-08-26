@@ -13,7 +13,7 @@ import CodeRail from '@site/src/components/CodeRail';
 :::info Implementasyon durumu — 2026-08-26 güncellendi
 Bu özellik **kodlandı ve gerçek Postgres/Mongo/LLM'e karşı uçtan uca test edildi** (`models/ai_document.py`, `services/ai_chat_repository.py`, `services/document_chat_service.py`, `services/pdf_extraction_service.py`, `services/ollama_client.py`, `services/gemini_client.py`, `routers/documents.py`, migration `9ec1c91aaff2_ai_documents`). Bu sayfa önceki bir revizyonda RAG (pgvector + embedding + Bedrock) öneriyordu — o tasarım **tamamen terk edildi**, sebebi aşağıda.
 
-**2026-08-26 güncellemesi:** `ask` endpoint'i artık generative UI kataloğuna (bkz. [NPFrontDocs — Generative UI Kataloğu](https://yusufkrnz.github.io/NPFrontDocs/architecture/generative-ui-catalog)) gerçekten bağlı — §11'deki "açık nokta" kapatıldı. Detaylar aşağıdaki [Çoklu Parça Görselleştirme](#coklu-parca-datasets) bölümünde.
+**2026-08-26 güncellemesi:** `ask` endpoint'i artık generative UI kataloğuna (bkz. [NPFrontDocs — Generative UI Kataloğu](https://yusufkrnz.github.io/NPFrontDocs/architecture/generative-ui-catalog)) gerçekten bağlı — §11'deki "açık nokta" kapatıldı. Detaylar aşağıdaki "Çoklu Parça Görselleştirme — datasets" bölümünde.
 :::
 
 ## Tanım
@@ -156,7 +156,7 @@ Gerçek üretimde veri egemenliği ilkesi bozulmayacaksa, hız için tek tutarl�
 
 Trafiğin gerçek maliyeti gösterdiği noktada ele alınacak, henüz kurulmayan bir sonraki optimizasyon: **prompt caching** — doküman metnini (sistem promptunun büyük kısmı) sağlayıcı tarafında cache'leyip sonraki sorularda tekrar göndermemek. Şimdiden kurulmadı, erken optimizasyon.
 
-## Çoklu Parça Görselleştirme (`datasets`) {#coklu-parca-datasets}
+## Çoklu Parça Görselleştirme — datasets
 
 `ask` endpoint'i artık düz metnin yanında (opsiyonel) **yapılandırılmış veri** de döndürüyor —
 [NPFrontDocs generative-ui-catalog.mdx](https://yusufkrnz.github.io/NPFrontDocs/architecture/generative-ui-catalog)'daki
