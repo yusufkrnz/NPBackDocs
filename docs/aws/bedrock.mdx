@@ -83,4 +83,4 @@ Her çağrının `input_tokens`, `output_tokens`, `cost_usd` değerleri backend 
 ## Notlar
 
 - Her model aynı parametreleri desteklemez (ör. bazı modeller `system` prompt alanını desteklemez) — Converse API bunu tamamen soyutlamaz, hangi modelin neyi desteklediği `models` tablosunda (databaseschema) tutulur ve çağrı öncesi kontrol edilir
-- Knowledge Bases (RAG) ve Bedrock Flows/Agents şu an kullanılmıyor — ihtiyaç doğarsa (ör. şirket içi dokümana dayalı cevap) ayrı bir karar/sayfa olarak eklenir, bu sayfanın kapsamına şimdiden dahil edilmedi
+- Bedrock Knowledge Bases (yönetilen RAG) ve Bedrock Flows/Agents kullanılmıyor — doküman tabanlı soru-cevap ihtiyacı (PDF yükleme) doğdu, ama Knowledge Bases yerine kendi RAG'ımız (pgvector + Converse API) tercih edildi, aynı "Agent değil kendi orkestrasyonumuz" gerekçesiyle. Detay: [PDF Doküman Analizi (RAG)](/use-cases/pdf-document-qa)

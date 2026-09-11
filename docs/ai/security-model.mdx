@@ -72,3 +72,5 @@ Bu sayfadaki model, her veri ihtiyacı için önceden yazılmış, sabit bir fon
 - **Rol bazlı tablo/kolon izni** — kullanıcının rolüne göre hangi tablo/kolonların LLM'e gösterileceği (katalog) ve Guard'ın neyi kabul edeceği aynı kaynaktan gelir
 
 Bu yaklaşımın maliyeti: Guard katmanının doğruluğu artık **kritik** güvenlik sınırı hâline gelir — AST parse'daki bir hata doğrudan güvenlik açığı demektir. Bu yüzden küçük/orta ölçekli, önceden bilinen veri ihtiyaçları için bu sayfadaki sabit-fonksiyon (`TOOL_REGISTRY`) yaklaşımı hem daha basit hem daha az riskli; SQL üretimi, ancak fonksiyon sayısı yönetilemez şekilde büyüdüğünde değerlendirilecek bir sonraki adımdır.
+
+Bu ikisinin **hibrit** olarak nasıl bir arada tutulacağı, pipeline'ın tam hâli, endüstri karşılıkları (text-to-SQL + semantic layer) ve bu geçişin getirdiği kendine özgü edge case'ler (subquery ile whitelist atlatma, agregasyon/JOIN ile kaynak tüketimi, kolon bazlı maskeleme, iki whitelist'in senkron kalması, routing kararı) için bkz. [Dinamik Sorgu Ölçeklenmesi](/ai/dynamic-function-scaling).

@@ -124,4 +124,4 @@ Tenant ve ilk kullanıcı **tek bir DB transaction'ında** oluşturulur — biri
 
 ## Sırada ne var
 
-Firma yetkilisi giriş yaptıktan sonra (bkz. [Login ve token oluşturma](/use-cases/login-and-token-issuance)) ekip arkadaşlarını [Ekip Daveti](/use-cases/team-invitation) ile aynı tenant'a ekleyebilir — bu noktadan sonra süper admin sürece hiç girmez. Süper admin tarafının kendi paneli (tenant listesi, plan/kullanım takibi, provisioning geçmişi) ayrı bir konu — henüz dokümante edilmedi, ihtiyaç netleşince ayrı bir bölüm olarak eklenecek.
+Firma yetkilisi giriş yaptıktan sonra (bkz. [Login ve token oluşturma](/use-cases/login-and-token-issuance)) ekip arkadaşlarını [Ekip Daveti](/use-cases/team-invitation) ile aynı tenant'a ekleyebilir — bu noktadan sonra süper admin sürece hiç girmez. Süper admin tarafının kendi paneli (tenant listesi, plan/kullanım takibi) [Platform Admin Service](/services/platform-admin)'de; bu akışın arka planda hangi adımlardan (Postgres/Mongo/mail) geçtiği ve retry mekanizması [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox)'ta anlatılıyor.

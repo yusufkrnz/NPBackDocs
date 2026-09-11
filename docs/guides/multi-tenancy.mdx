@@ -26,10 +26,11 @@ Shared-schema seçimi, migration'ı önemli ölçüde basitleştirir: [Alembic](
 
 ## Büyük müşteri ihtiyacı doğarsa
 
-"Şirket büyüklüğüne göre" farklı bir izolasyon seviyesi gerekirse (ör. büyük bir kurumsal müşteri kendi DB'sini istiyor), bu **tüm sistemi** schema-per-tenant'a geçirmek anlamına gelmez — sadece o tek tenant için ayrı bir bağlantı/routing katmanı eklenir, geri kalan tenant'lar shared-schema'da kalmaya devam eder. Bu senaryo şu an karşılaşılmadığı için tasarlanmadı, sadece mimarinin buna kapalı olmadığı belirtiliyor.
+"Şirket büyüklüğüne göre" farklı bir izolasyon seviyesi gerekirse (ör. büyük bir kurumsal müşteri kendi DB'sini istiyor), bu **tüm sistemi** schema-per-tenant'a geçirmek anlamına gelmez — sadece o tek tenant için ayrı bir bağlantı/routing katmanı eklenir, geri kalan tenant'lar shared-schema'da kalmaya devam eder. Bunu ucuza mümkün kılan şey, tüm DB erişiminin tek bir merkezi **session factory** (`get_tenant_session()`, `core/db.py` — kodlandı) üzerinden yapılması — hangi şemaya/connection'a bağlanılacağı kararı router/service kodundan tamamen izole. Detay: [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox#session-factory--coredbpy). Bu senaryo şu an karşılaşılmadığı için tasarlanmadı, sadece mimarinin buna kapalı olmadığı belirtiliyor.
 
 ## İlgili sayfalar
 
 - [Tenant Oluşturma](/use-cases/user-registration) — tenant'ın ilk oluşturulduğu an (süper admin tarafından)
 - [Ekip Daveti](/use-cases/team-invitation) — var olan bir tenant'a yeni kullanıcı ekleme
 - [Tenant Service](/services/tenant-service) — tenant/davet endpoint referansı
+- [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox) — session factory ve retry mekanizmasının tam detayı

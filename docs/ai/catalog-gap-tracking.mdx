@@ -1,0 +1,92 @@
+---
+title: Katalog Boşluğu Takibi
+sidebar_position: 12
+description: Kataloğun/gramerin karşılayamadığı istekleri loglayıp, tekrarlayan pattern'leri deliberate katalog büyümesine çeviren sistem — henüz şemada yok, öneri.
+wide_toc: true
+---
+
+# Katalog Boşluğu Takibi
+
+[Dinamik Sorgu Ölçeklenmesi](/ai/dynamic-function-scaling)'nin son bölümü şunu söylüyor: katalog/gramer hiçbir zaman tam olmayacak, o yüzden bir **büyüme süreci** gerekiyor. Bu sayfa o süreci somut bir sistem olarak tanımlıyor — şema, yazma yolları, review akışı. Henüz kodda yok, tasarım aşamasında.
+
+## Sorumluluk
+
+Kataloğun/gramerin karşılayamadığı **her** istek — `Unsupported` component seçimi, SQL Guard'ın reddettiği tablo/kolon isteği, düşük güvenilirlikli retrieval ([Ölçeklenme](/edge-cases/catalog-retrieval/scaling) EDGE-CASE-025/026) — otomatik olarak kaydedilir. Amaç: kataloğu "ne eklenmeli" tahminiyle değil, **gerçek talep verisiyle** büyütmek.
+
+## Şema (öneri — henüz yok)
+
+```python showLineNumbers
+# databaseschema/mongodb/catalog_gaps (öneri)
+{
+  "_id": ObjectId,
+  "tenant_id": "uuid",
+  "user_id": "uuid",
+  "gap_type": "ui_unsupported | sql_guard_rejected | low_confidence_retrieval",
+  "user_message": "satış hunisini göster",       # orijinal doğal dil istek — asla düzenlenmez
+  "attempted": {                                    # LLM'in ne yapmaya çalıştığı, gerçek veri değil
+    "component_or_table": "LineChart",              # ya da reddedilen tablo adı
+    "confidence_score": 0.28                        # varsa (retrieval durumunda)
+  },
+  "created_at": "timestamptz",
+  "resolved": false,
+  "resolved_as": null                               # çözülünce: "archetype:funnel" ya da "table:refunds"
+}
+```
+
+`tenant_id`/`user_id` zaten JWT'den geliyor, `user_message` **hiç değiştirilmeden** saklanıyor — bu koleksiyonun tek amacı gerçek dili görmek, LLM'in yorumunu değil.
+
+## Yazma yolları — mevcut iki reddetme noktasına tek satır ekleniyor
+
+Yeni bir servis değil, [Güvenlik Modeli](/ai/security-model)'ndeki whitelist reddi ve [EDGE-CASE-035](/ai/dynamic-function-scaling#edge-case-035-component-kataloğunda-uygun-eşleşme-yok-sinyali-bulunmuyor)'teki `Unsupported` seçimi zaten var olan iki noktaya bir log çağrısı ekleniyor:
+
+```python showLineNumbers
+# services/ui_validator.py — component "Unsupported" seçildiğinde
+if node["type"] == "Unsupported":
+    await log_catalog_gap(
+        gap_type="ui_unsupported",
+        user_message=original_user_message,
+        attempted={"component_or_table": llm_decision.get("closest_guess")},
+    )
+    return unsupported_response(suggest=list(CATALOG.keys()))
+```
+
+```python showLineNumbers
+# services/sql_guard.py — whitelist dışı tablo reddedildiğinde
+if not ast.referenced_tables.issubset(allowed_tables):
+    await log_catalog_gap(
+        gap_type="sql_guard_rejected",
+        user_message=original_user_message,
+        attempted={"component_or_table": list(ast.referenced_tables - allowed_tables)[0]},
+    )
+    raise AuthorizationError(code="ai.sql_table_not_allowed")
+```
+
+İkisi de reddetme akışını değiştirmiyor — sadece reddederken **neyin** reddedildiğini kaydediyor.
+
+## Review — tekrarlayan pattern'i katalog girdisine çeviren eşik
+
+Haftalık bir job, `catalog_gaps`'i `tenant_id` çeşitliliği ve semantik benzerlik (aynı embedding retrieval'ın kullandığı model) ile kümeler, eşiği geçenleri raporlar:
+
+```python showLineNumbers
+# services/catalog_gap_review.py (öneri, haftalık cron)
+async def weekly_gap_report(min_occurrences: int = 5, min_distinct_tenants: int = 3):
+    clusters = await cluster_by_semantic_similarity(
+        collection="catalog_gaps",
+        filter={"resolved": False, "created_at": {"$gte": last_30_days()}},
+    )
+    return [
+        c for c in clusters
+        if c.occurrence_count >= min_occurrences and c.distinct_tenant_count >= min_distinct_tenants
+    ]
+```
+
+Eşiği geçen bir küme **otomatik olarak kataloğa eklenmiyor** — [Güvenlik Modeli](/ai/security-model)'ndeki hiçbir katman LLM'in kararına güvenmiyor, bu da aynı: yeni bir archetype/tablo eklemek her zaman bir geliştiricinin [Katalog / Registry](/ai/registry#isimlendirme-kuralı)'deki süreçten geçmesini gerektirir (şema yaz, review et, hem katalog hem registry'ye ekle). Rapor sadece **neyin** eklenmeye değer olduğunu, gerçek veriyle, önceliklendirerek gösteriyor.
+
+## Nerede görünüyor — Platform Admin paneline 6. sayfa
+
+[Platform Admin Service](/services/platform-admin)'in panel sayfaları listesine eklenir: **Katalog Boşlukları** — haftalık raporu tablo olarak gösterir (istek örneği, kaç kez, kaç tenant, `gap_type`), her satırda "çözüldü olarak işaretle" (→ `resolved_as` alanını doldurur, hangi archetype/tabloyla kapandığını iz bırakır). Diğer platform-admin sayfaları gibi bu da tenant-scoped auth'tan tamamen ayrı, `is_platform_admin` gerektiriyor.
+
+## Kapsam dışı (bilinçli olarak)
+
+- **Otomatik katalog genişletme** — kümeleme eşiği geçse bile LLM/sistem kendi kendine yeni bir archetype/tablo eklemiyor; bu her zaman insan review'i gerektiren bir adım. Aksi, [Güvenlik Modeli](/ai/security-model)'nin "LLM'in kararına güvenme" ilkesini bir katman yukarıda ihlal eder.
+- **Gerçek zamanlı bildirim** — bir gap oluştuğu an birine mesaj/e-posta gitmiyor; MVP haftalık toplu rapor. Sık/kritik bir gap tekrar ederse bu eşik/sıklık ayarı değişebilir, ihtiyaç görülünce.

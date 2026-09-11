@@ -1,0 +1,94 @@
+---
+title: Görsel Primitive'ler — Image, Ham Vektör Katmanı, Alan Tasarımı
+sidebar_position: 13
+description: Avatar/image encoding, mark+encoding'in altındaki güvenli vektör primitive katmanı, ve "inert veri" ile "davranış seçen alan" ayrımı — kataloğa dokunmadan karşılanabilen istekleri genişletir.
+wide_toc: true
+---
+
+# Görsel Primitive'ler — Image, Ham Vektör Katmanı, Alan Tasarımı
+
+[Dinamik Sorgu Ölçeklenmesi](/ai/dynamic-function-scaling)'ndeki mark+encoding grameri chart seviyesinde çalışıyor. Bu sayfa üç şeyi netleştiriyor: (1) kişi görseli/avatar gibi isteklerin gramerdeki karşılığı, (2) gramerin bile karşılamadığı niş isteklerde bir alt katman, (3) "kataloğa bağlı kalmamak" için alan şemasının nasıl tasarlanması gerektiği — bu üçü birlikte, kataloğa hiç dokunmadan karşılanabilecek isteklerin kapsamını ciddi şekilde genişletiyor.
+
+## 1 — Görsel/avatar: yeni bir kavram değil, `image` mark'ı + `shape` encoding'i
+
+Grammar-of-graphics'in (Vega-Lite vb.) zaten tanımlı bir `image` mark tipi ve `shape` encoding kanalı var — uydurma bir uzantı değil.
+
+**Her noktanın kendi görseli** (ör. scatter chart'ta her nokta ilgili satırın avatarı):
+
+```json
+{
+  "mark": "point",
+  "encoding": {
+    "x": { "field": "deal_amount" },
+    "y": { "field": "close_probability" },
+    "shape": { "field": "sales_rep_avatar" }
+  }
+}
+```
+
+`shape` kanalı diğer kanallar (`x`/`y`/`color`) ile birebir aynı mekanizmayla çalışıyor — **satır satır** bağlanıyor, `state`'teki `sales_rep_avatar` dizisinin her elemanı ilgili noktaya karşılık geliyor:
+
+```json
+"state": {
+  "deal_amount": [12000, 45000, 8000],
+  "sales_rep_avatar": ["https://cdn.../ayse.jpg", "https://cdn.../mehmet.jpg", "https://cdn.../elif.jpg"]
+}
+```
+
+**Ayrı, büyük bir görsel** (kart üstünde profil fotoğrafı gibi) için ayrı bir `mark: "image"` node'u, `encoding.url` ile.
+
+### Zorunlu güvenlik kısıtı: URL whitelist
+
+`url`/`shape` alanına LLM'in ya da veri kaynağının **serbest bir domain** yazabilmesi SSRF/tracking-pixel riski taşır. Bu yüzden `url` alanı her zaman backend'in kendi CDN/storage'ından (signed URL, tenant'a ait asset) gelir — LLM bu değeri asla üretmiyor, sadece "buraya görsel bağlansın" diyor, [Neden LLM'e Ham Veri Vermiyoruz](/ai/why-no-raw-data) ile aynı ayrım.
+
+## 2 — Ham vektör primitive katmanı: mark+encoding'in de karşılamadığı niş istekler için
+
+Mark+encoding chart'a özel bir gramer. Bunun **altında**, SVG'nin kendisini JSON olarak tanımlayan, çok daha genel bir katman kurulabilir — `rect`, `circle`, `path`, `text`, `line`, `group`, her biri sabit ve dar bir prop şemasına sahip:
+
+```json
+{
+  "type": "group",
+  "children": [
+    { "type": "path", "d": "M10,50 L40,10 L70,50 Z", "fill": { "$state": "/tone" } },
+    { "type": "text", "x": 40, "y": 65, "content": { "$state": "/label" } }
+  ]
+}
+```
+
+Bu katman chart tipi kataloglamıyor, **çizim primitive'i** kataloglıyor — o yüzden hiç görülmemiş bir görsel istek bile (özel bir ikon, basit bir diyagram) kataloğa yeni bir şey eklenmeden, review beklenmeden anında çizilebiliyor. Hâlâ %100 whitelist'li: izin verilen node tipleri sabit, `<script>`/`<foreignObject>`/event handler/`javascript:` URL şeması kataloğa hiç girmiyor — render eden şey `dangerouslySetInnerHTML` değil, güvenli bir SVG-primitive yorumlayıcısı.
+
+**Trade-off:** LLM'in ham `path`/`rect` koordinatlarıyla "güzel" bir şey üretmesi, hazır bir archetype'a (funnel, heatmap gibi) göre daha zor — şema güvenli ama görsel kalite garantisi yok. Bu yüzden sıralama şöyle: önce archetype (varsa), yoksa mark+encoding kombinasyonu, o da karşılamıyorsa bu ham katman — **son çare, ama hâlâ güvenli bir son çare**, HTML/sandbox'a hiç gitmeden.
+
+### Bunun bile karşılamadığı tek şey
+
+Gerçek **interaktivite/kod çalıştırma** gerektiren istekler — üçüncü parti bir widget gömmek, canlı harita, video oynatıcı. Bunlar "görsel çizmek" değil "kod çalıştırmak" — hiçbir JSON katmanı (mark+encoding, ham primitive) bunu çözmüyor, çünkü mesele render formatı değil çalıştırılabilir kod. Bu gerçekten yeni bir component/entegrasyon (kod yazılan, review'den geçen) gerektiriyor, ya da izole bir sandbox modu — bkz. [Dinamik Sorgu Ölçeklenmesi](/ai/dynamic-function-scaling) sonundaki "kapsam dışı" tartışması.
+
+## 3 — Alan tasarımı: "inert veri" ile "davranış seçen alan" ayrımı
+
+Kataloğa gerçekten **bağlı kalmadan** karşılanabilen isteklerin sayısını büyük ölçüde artıran tek bir tasarım kararı: her prop için kapalı `enum` yerine, alanın **ne yaptığına** göre iki farklı kısıt uygulamak.
+
+| Alan tipi | Örnek | Kısıt | Neden |
+|---|---|---|---|
+| **Davranış seçen** | `component` tipi, `mark` tipi, `url` domaini | Kapalı `enum`/whitelist | Değeri **kod yolunu** belirliyor — hangi component render edilecek, hangi domain'e istek gidecek. Güvenlik sınırı burada. |
+| **Inert veri** | renk, boyut, metin etiketi, sayı | Açık, sadece **format** doğrulanmış (regex/aralık) | Değeri çalıştırılabilir değil, sadece görüntüleniyor — hangi renk seçilirse seçilsin güvenlik riski yok. |
+
+```python showLineNumbers
+class StatCardProps(BaseModel):
+    # davranış seçen — kapalı
+    variant: str = Field(...)  # Literal["compact", "detailed"]  gibi kapalı bir enum
+
+    # inert veri — açık, sadece format kısıtlı
+    tone: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")     # herhangi bir hex renk
+    label: str = Field(max_length=40)                    # herhangi bir metin
+    icon_size: int = Field(ge=8, le=64)                   # herhangi bir sayı, aralık içinde
+```
+
+Önceki tasarımda `tone: enum["neutral","good","warning","critical"]` gibi kapalı bir liste kullanmak **gereksiz kısıtlayıcıydı** — kullanıcı "mor yap" dediğinde LLM `"#800080"` üretebilir, kataloğa hiç dokunmadan, `Unsupported`'a hiç düşmeden. Bu ayrım yapılmazsa, aslında inert olan pek çok alan (renk, boyut, metin) yanlışlıkla davranış-seçen alan gibi kısıtlanıp gereksiz yere [Katalog Boşluğu Takibi](/ai/catalog-gap-tracking) döngüsüne düşer.
+
+## Özet — üç katman birlikte neyi genişletiyor
+
+1. **Archetype + mark/encoding** — sık tekrarlanan görselleştirme ihtiyaçlarının büyük çoğunluğu
+2. **Ham vektör primitive'leri** — mark/encoding'in karşılamadığı niş, bir kerelik çizim istekleri, review beklemeden
+3. **İnert veri / davranış-seçen alan ayrımı** — renk/boyut/metin gibi "her zaman zaten güvenli" olan alanlarda kataloğa hiç bağlı kalmama
+
+Kataloğa gerçekten bağlı kalan tek kısım: **yeni bir mark/primitive tipi** (nadiren büyür) ve **gerçek kod/interaktivite gerektiren istekler** (ayrı bir component/entegrasyon kararı). Geri kalan her şey — 3-4 primitive'in kombinasyonu, niş bir tek seferlik çizim, herhangi bir renk/boyut/metin değişikliği — kataloğa dokunmadan, anında karşılanıyor.

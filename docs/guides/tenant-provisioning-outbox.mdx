@@ -1,0 +1,304 @@
+---
+title: Tenant Provisioning — Outbox Pattern
+sidebar_position: 7
+description: Tenant oluşturma sonrası Postgres/Mongo/mail adımlarının retry'li ve SuperAdmin'de adım adım izlenebilir şekilde yürütülmesi — session factory ve outbox pattern, gerçek kod.
+wide_toc: true
+---
+
+import CodeEditor from '@site/src/components/CodeEditor';
+import CodeRail from '@site/src/components/CodeRail';
+
+# Tenant Provisioning — Outbox Pattern
+
+:::info Implementasyon durumu — 2026-08-14
+Bu sayfadaki outbox motoru (session factory, `tenant_outbox_events`, poller, handler registry) **kodlandı, gerçek Postgres'e karşı migration uygulandı ve smoke test'ten geçti**. `routers/admin.py` (`POST /admin/tenants`) ve Auth Service (JWT decode) henüz kodlanmadı — bu ikisi olmadan akış uçtan uca çalışmaz, ama outbox motorunun kendisi bağımsız olarak hazır ve doğrulanmış durumda. Detaylı tablo: [Implementasyon Durumu](#implementasyon-durumu).
+:::
+
+[Platform Admin Service](/services/platform-admin#tenant-oluşturma-orkestrasyonu--outbox-pattern-ile-retryli) daha önce "tek fonksiyon, try/except, ayrı bir Saga'ya gerek yok" diyordu. SuperAdmin'in hangi adımın (Postgres/Mongo/mail) nerede takıldığını ayrı ayrı görebilmesi ve retry'nin otomatik olması ihtiyacı netleşince bu sayfadaki outbox pattern'e geçildi ve kodlandı.
+
+## Implementasyon Durumu
+
+| Parça | Dosya | Durum |
+|---|---|---|
+| Session factory | `core/db.py` | ✅ kodlandı |
+| Auth seam | `core/auth.py` | ✅ kodlandı — `get_current_tenant_id` kasıtlı `NotImplementedError` atıyor, Auth Service bekliyor |
+| Mongo client | `core/mongo.py` | ✅ kodlandı |
+| Tenant modeli | `models/tenant.py` | ✅ kodlandı, migration uygulandı |
+| Outbox modeli | `models/tenant_outbox_event.py` | ✅ kodlandı, migration uygulandı |
+| Outbox engine | `core/outbox/{enums,backoff,handlers,repository,service,poller}.py` | ✅ kodlandı, unit + smoke test geçti |
+| Mail handler | `services/email_service.py` | ✅ kodlandı — canlı SMTP ile kasıtlı tetiklenmedi |
+| Mongo audit handler | `services/audit_service.py` | ✅ kodlandı — canlı Mongo o an kapalı olduğu için henüz test edilmedi |
+| FastAPI wiring | `core/lifespan.py`, `main.py` | ✅ kodlandı |
+| Migration | `alembic/` (async template) | ✅ `tenants` + `tenant_outbox_events`, gerçek `newportal` DB'sinde uygulandı |
+| `POST /admin/tenants` endpoint | `routers/admin.py` | ⏳ henüz yok |
+| Auth Service (JWT) | `services/auth_service.py` (planlanan) | ⏳ henüz yok |
+
+## Şema: `tenant_outbox_events`
+
+```
+tenant_outbox_events
+  id               uuid pk, default gen_random_uuid()
+  tenant_id        uuid, FK -> tenants.id (ON DELETE CASCADE)
+  event_type       varchar(50)   -- OutboxEventType: send_invite_email | seed_mongo_audit
+  status           varchar(20)   -- OutboxStatus: pending / processing / succeeded / failed
+  payload          jsonb
+  attempt_count    int, default 0
+  next_attempt_at  timestamptz, default now()
+  last_error       text
+  created_at       timestamptz
+  updated_at       timestamptz
+
+  index (status, next_attempt_at)  -- poller'ın claim sorgusu tam bunu kullanır
+```
+
+`event_type`/`status` kasıtlı olarak native Postgres `ENUM` değil, `VARCHAR` (SQLAlchemy `Enum(..., native_enum=False)`) — yeni bir event_type eklemek `ALTER TYPE` migration'ı gerektirmesin diye; uygulama seviyesinde Python enum yeterli.
+
+## Session Factory — `core/db.py`
+
+<CodeRail>
+  <CodeEditor
+    filename="core/db.py"
+    code={`engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Cross-tenant erişim — Platform Admin ve outbox poller bunu kullanır."""
+    async with SessionLocal() as session:
+        yield session
+
+async def get_tenant_session(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+) -> AsyncGenerator[AsyncSession, None]:
+    """Tenant-scoped erişimin TEK kapısı."""
+    async with SessionLocal() as session, session.begin():
+        await session.execute(
+            text("SET LOCAL app.current_tenant = :tenant_id"),
+            {"tenant_id": str(tenant_id)},
+        )
+        yield session`}
+  />
+</CodeRail>
+
+`get_current_tenant_id` (`core/auth.py`) şu an bilerek `NotImplementedError` atıyor — JWT decode Auth Service ile gelecek, o güne kadar `get_tenant_session`'a bağımlı hiçbir router yazılamaz. `get_db_session` bundan etkilenmez, Platform Admin router'ları bugünden yazılabilir.
+
+## Outbox Engine — dört ayrı sorumluluk
+
+İlk tasarımdaki tek-fonksiyon örneğinin aksine gerçek kod dört katmana ayrıldı — her biri tek başına test edilebilir:
+
+| Dosya | Sorumluluk |
+|---|---|
+| `core/outbox/enums.py` | `OutboxEventType`, `OutboxStatus` — tek kaynak, model/repository/handler hepsi buradan okur |
+| `core/outbox/backoff.py` | `compute_backoff(attempt_count)` — saf fonksiyon, DB/asyncio bağımlılığı yok |
+| `core/outbox/handlers.py` | `Protocol` + `register_handler`/`get_handler` registry — yeni event_type eklemek burada yeni bir dekoratör, poller/service/repository değişmez (Open/Closed) |
+| `core/outbox/repository.py` | `OutboxRepository` — tabloya dokunan TEK yer (persistence, SRP) |
+| `core/outbox/service.py` | `OutboxService` — orkestrasyon: claim → handler çağır → sonucu yaz. Repository'ye ve handler registry'ye soyutlama üzerinden bağımlı (DIP) |
+| `core/outbox/poller.py` | `OutboxPoller` — asyncio görev döngüsü, `stop()` ile temiz kapanış |
+
+### Repository — claim, `FOR UPDATE SKIP LOCKED`
+
+<CodeRail>
+  <CodeEditor
+    filename="core/outbox/repository.py"
+    code={`class OutboxRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def claim_pending(self, *, batch_size: int) -> list[TenantOutboxEvent]:
+        stmt = (
+            select(TenantOutboxEvent)
+            .where(TenantOutboxEvent.status == OutboxStatus.PENDING)
+            .where(TenantOutboxEvent.next_attempt_at <= datetime.now(timezone.utc))
+            .order_by(TenantOutboxEvent.created_at)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+        events = list((await self._session.execute(stmt)).scalars().all())
+        for event in events:
+            event.status = OutboxStatus.PROCESSING
+        return events
+
+    async def mark_failed_or_retry(self, event, *, error: str, max_attempts: int) -> None:
+        event.attempt_count += 1
+        event.last_error = error[:500]
+        if event.attempt_count >= max_attempts:
+            event.status = OutboxStatus.FAILED          # dead-letter
+        else:
+            event.status = OutboxStatus.PENDING
+            event.next_attempt_at = datetime.now(timezone.utc) + compute_backoff(event.attempt_count)
+
+    async def reset_for_manual_retry(self, event) -> None:
+        """SuperAdmin panelindeki 'tekrar dene' butonunun çağıracağı yol."""
+        event.status = OutboxStatus.PENDING
+        event.attempt_count = 0
+        event.last_error = None
+        event.next_attempt_at = datetime.now(timezone.utc)`}
+  />
+</CodeRail>
+
+### Service — orkestrasyon
+
+<CodeRail>
+  <CodeEditor
+    filename="core/outbox/service.py"
+    code={`class OutboxService:
+    async def process_batch(self) -> int:
+        event_ids = await self._claim_batch()
+        for event_id in event_ids:
+            await self._handle_one(event_id)
+        return len(event_ids)
+
+    async def _claim_batch(self) -> list[uuid.UUID]:
+        async with self._session_factory() as session, session.begin():
+            repo = OutboxRepository(session)
+            events = await repo.claim_pending(batch_size=self._batch_size)
+            return [event.id for event in events]
+        # commit burada -> "processing" kalıcı olur, başka poller aynı satırı çekemez
+
+    async def _handle_one(self, event_id: uuid.UUID) -> None:
+        async with self._session_factory() as session, session.begin():
+            event = await session.get(TenantOutboxEvent, event_id)
+            if event is None:
+                return  # ör. tenant CASCADE ile silindi
+            repo = OutboxRepository(session)
+            try:
+                handler = get_handler(event.event_type)
+                await handler(event)
+            except Exception as exc:
+                await repo.mark_failed_or_retry(event, error=str(exc), max_attempts=self._max_attempts)
+            else:
+                await repo.mark_succeeded(event)`}
+  />
+</CodeRail>
+
+### Poller — asyncio lifecycle, graceful stop
+
+İlk tasarımdaki basit `while True: ... sleep(N)` yerine, kapanışta bekleyen sleep'i kesip hemen dönen bir `asyncio.Event` kullanılıyor:
+
+<CodeRail>
+  <CodeEditor
+    filename="core/outbox/poller.py"
+    code={`class OutboxPoller:
+    def start(self) -> None:
+        self._stop_event.clear()
+        self._task = asyncio.create_task(self._run(), name="outbox-poller")
+
+    async def stop(self) -> None:
+        self._stop_event.set()
+        await self._task
+        self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                await self._service.process_batch()
+            except Exception:
+                logger.exception("outbox poller batch işlenirken hata")
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self._interval)
+            except asyncio.TimeoutError:
+                pass  # normal — bir sonraki tur için sleep süresi doldu`}
+  />
+</CodeRail>
+
+## Handler registry — Open/Closed prensibi
+
+<CodeRail>
+  <CodeEditor
+    filename="core/outbox/handlers.py"
+    code={`class OutboxEventHandler(Protocol):
+    async def __call__(self, event: TenantOutboxEvent) -> None: ...
+
+_registry: dict[OutboxEventType, OutboxEventHandler] = {}
+
+def register_handler(event_type: OutboxEventType):
+    def decorator(fn):
+        _registry[event_type] = fn
+        return fn
+    return decorator
+
+def get_handler(event_type: OutboxEventType) -> OutboxEventHandler:
+    try:
+        return _registry[event_type]
+    except KeyError as exc:
+        raise HandlerNotRegisteredError(...) from exc`}
+  />
+</CodeRail>
+
+Concrete handler'lar `services/` altında yaşar, dekoratörle kendilerini kaydeder — `core/outbox` onların SMTP/Mongo detaylarını hiç bilmez:
+
+<CodeRail>
+  <CodeEditor
+    filename="services/email_service.py"
+    code={`@register_handler(OutboxEventType.SEND_INVITE_EMAIL)
+async def send_invite_email_handler(event: TenantOutboxEvent) -> None:
+    payload = event.payload or {}
+    await send_invite_email(to_email=payload["email"], raw_token=payload["raw_token"])`}
+  />
+</CodeRail>
+
+<CodeRail>
+  <CodeEditor
+    filename="services/audit_service.py"
+    code={`@register_handler(OutboxEventType.SEED_MONGO_AUDIT)
+async def seed_mongo_audit_handler(event: TenantOutboxEvent) -> None:
+    await log_tenant_created(event.tenant_id)
+
+async def log_tenant_created(tenant_id: uuid.UUID) -> None:
+    db = get_mongo_database()
+    await db.audit_log.update_one(
+        {"tenant_id": str(tenant_id), "event": "tenant.created"},
+        {"$setOnInsert": {"tenant_id": str(tenant_id), "event": "tenant.created", "created_at": datetime.now(timezone.utc)}},
+        upsert=True,   # idempotent — retry'de ikinci kayıt oluşmaz
+    )`}
+  />
+</CodeRail>
+
+Handler'ların registry'ye girmesi için modüllerinin import edilmesi yeterli — bu, `core/lifespan.py`'de FastAPI başlarken yapılıyor:
+
+<CodeRail>
+  <CodeEditor
+    filename="core/lifespan.py"
+    code={`@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import services.audit_service  # noqa: F401  (register_handler side-effect)
+    import services.email_service  # noqa: F401
+
+    outbox_service = OutboxService(SessionLocal, batch_size=..., max_attempts=...)
+    poller = OutboxPoller(outbox_service, poll_interval_seconds=...)
+    poller.start()
+    yield
+    await poller.stop()`}
+  />
+</CodeRail>
+
+## Test kapsamı
+
+- `tests/test_outbox_backoff.py` — `compute_backoff` saf fonksiyonu (3 test)
+- `tests/test_outbox_handlers_registry.py` — registry kayıt/lookup, kayıtsız event_type'ta `HandlerNotRegisteredError` (2 test)
+- **Smoke test (gerçek Postgres'e karşı, script — repoda değil):**
+  - Başarı yolu: `claim → processing → succeeded`, `FOR UPDATE SKIP LOCKED` doğrulandı
+  - Hata yolu: `attempt_count` artıyor, backoff `next_attempt_at`'i doğru öteliyor (bir sonraki turda erken claim edilmiyor), `max_attempts`'e ulaşınca `failed` (dead-letter)
+  - İkisi de SMTP/Mongo'ya dokunmadan, test-only sahte handler'larla çalıştırıldı, test verisi sonda temizlendi
+
+## SuperAdmin'de görünüm — henüz yok
+
+`GET /admin/tenants/{id}/provisioning` ve `POST /admin/tenants/{id}/provisioning/{event_type}/retry` (bkz. [Platform Admin Service](/services/platform-admin)) **henüz kodlanmadı** — outbox motoru hazır olduğu için bu endpoint'ler `OutboxRepository`/`tenant_outbox_events` üzerine ince bir router katmanı olmaktan öteye gitmeyecek.
+
+## Idempotency notu
+
+At-least-once garanti (exactly-once değil). Mail gönderilip DB'ye `succeeded` yazılmadan poller çökerse mail 2. kez gidebilir — kabul edilen risk. `seed_mongo_audit_handler` zaten `$setOnInsert` + upsert ile idempotent yazıyor.
+
+## Sırada ne var
+
+1. `models/user.py`, `models/invitation.py`
+2. `routers/admin.py` — `POST /admin/tenants` (tenant + admin user tek transaction'da, outbox event'leri aynı transaction'a insert)
+3. `routers/admin.py` — provisioning durumu + manuel retry endpoint'leri
+4. Auth Service — `core/auth.py::get_current_tenant_id`'yi JWT decode ile doldurmak
+5. Mongo bağlantısının gerçek ortamda (Docker/mevcut Mongo) doğrulanması — `seed_mongo_audit_handler` henüz canlı test edilmedi
+
+## İlgili sayfalar
+
+- [Tenant Oluşturma](/use-cases/user-registration) — bu mekanizmayı tetikleyen akış
+- [Platform Admin Service](/services/platform-admin) — provisioning durumunun göründüğü panel/endpoint'ler (henüz kodlanmadı)
+- [Multi-tenancy](/guides/multi-tenancy) — shared-schema + tenant_id kararı, session factory'nin üzerine oturduğu izolasyon modeli
+- [Davet Linki Teslimi](/services/auth-service/invite-delivery) — `send_invite_email` handler'ının SMTP detayları

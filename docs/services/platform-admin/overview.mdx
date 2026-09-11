@@ -41,15 +41,19 @@ Bir tenant'ın `admin`'i olmak, platform admin olmakla **hiçbir ilişkisi yoktu
 | <span className="badge badge--info">GET</span> | `/admin/tenants/{id}/usage` | Tenant'ın zaman içindeki token kullanımı (panel — Kullanım Takibi sayfası) | [Maliyet Yönetimi](/cost-management) |
 | <span className="badge badge--info">GET</span> | `/admin/plans` | Tanımlı paketleri listeler (panel — Paketler sayfası) | — |
 | <span className="badge badge--warning">POST</span> | `/admin/plans` | Yeni paket tanımlar (`plan_id` üretmenin tek yolu — tenant oluşturmadan önce en az bir paket var olmalı) | — |
+| <span className="badge badge--info">GET</span> | `/admin/tenants/{id}/provisioning` *(henüz kodlanmadı)* | Tenant'ın outbox adımlarının durumu (mail/Mongo, step-by-step) | [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox) |
+| <span className="badge badge--warning">POST</span> | `/admin/tenants/{id}/provisioning/{event_type}/retry` *(henüz kodlanmadı)* | `failed` (dead-letter) durumundaki bir adımı elle tekrar `pending`'e alır — `OutboxRepository.reset_for_manual_retry` zaten kodlandı, bu sadece onu çağıran router | [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox) |
 
 Paket **düzenleme** (`PUT /admin/plans/{id}`) bilinçli olarak MVP'de yok — şimdilik paketler nadiren değişiyor, ihtiyaç çıkınca eklenir.
 
-## Panel sayfaları (MVP — 4 sayfa)
+## Panel sayfaları (MVP — 5 sayfa)
 
 1. **Dashboard** — toplam/aktif tenant sayısı, bu ay oluşturulan tenant, toplam token tüketimi (tek bakışta özet)
 2. **Tenant'lar** — liste + detay + yeni tenant oluşturma formu (`POST /admin/tenants`'ı çağırır)
 3. **Paketler** — tanımlı paketlerin listesi + yeni paket ekleme formu
 4. **Kullanım Takibi** — bir tenant seçilince zaman serisi grafik (token/ay)
+5. **Provisioning Durumu** *(henüz kodlanmadı)* — bir tenant'ın oluşturma sürecindeki her adımını (Postgres seed, Mongo audit, davet maili) ayrı ayrı gösterir; başarısız adıma "tekrar dene" butonu. Alttaki outbox motoru (`core/outbox/`) kodlandı ve test edildi, bu sayfa ona ince bir router katmanı eklemekten ibaret. Detay: [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox#implementasyon-durumu)
+6. **Katalog Boşlukları** *(henüz kodlanmadı, öneri)* — AI katmanının component/tablo kataloğunun karşılayamadığı istekleri (haftalık kümelenmiş rapor) listeler, "çözüldü" işaretleme ile hangi archetype/tabloya dönüştüğünü izler. Detay: [Katalog Boşluğu Takibi](/ai/catalog-gap-tracking)
 
 Panelin kendisi ayrı bir küçük React uygulaması (ana ürünün frontend'inden bağımsız, sadece bu `/admin/...` endpoint'lerini tüketir) — hazır bir admin-panel kütüphanesi (AdminJS vb.) kullanılmıyor çünkü dil uyumsuzluğu var (bkz. aşağıdaki not) ve özel görselleştirme (grafik) gerektiriyor.
 
@@ -57,17 +61,24 @@ Panelin kendisi ayrı bir küçük React uygulaması (ana ürünün frontend'ind
 AdminJS gibi araçlar Node.js ekosistemine (TypeORM/Prisma gibi JS ORM'lere) bağımlı — Python/FastAPI/SQLAlchemy ile doğrudan konuşmuyorlar. **Ama** `sqladmin` (Python-native, SQLAlchemy modellerinden otomatik CRUD üretiyor) gerçek bir hızlandırıcı — **Tenant'lar** ve **Paketler** sayfaları için (düz CRUD, özel görselleştirme gerektirmiyor) `sqladmin` kullanılıyor. **Kullanım Takibi**'ndeki zaman serisi grafiği gibi özel görünümler `sqladmin`'in kapsamı dışında, orada ince bir özel view yazılıyor. Yani: mümkün olan yerde hazır araç, gerektiği yerde özel kod — ikisi bir arada.
 :::
 
-## Tenant oluşturma orkestrasyonu — sıralı, ama mikroservis değil
+## Tenant oluşturma orkestrasyonu — outbox pattern ile retry'li
 
-`POST /admin/tenants` tek bir işlem gibi görünse de arka planda 3 farklı sisteme dokunuyor: **Postgres** (tenant + admin user), **Mongo** (`audit_log`'a olay kaydı), **e-posta** (davet linki). [İki DB'ye dikkat](/guards) bölümünde konuştuğumuz gibi bunlar arasında atomic bir transaction yok — ama bu bir mikroservis/dağıtık-sistem problemi değil, tek bir orkestratör fonksiyonun içinde sıralı adımlar:
+:::info Karar değişikliği
+Bu bölüm daha önce "tek fonksiyon, try/except, ayrı bir Saga'ya gerek yok" diyordu — Mongo/mail adımları "retry kuyruğuna düşer" deniyordu ama bu kuyruk somutlaştırılmamıştı, mail için tek telafi manuel "yeniden gönder" butonuydu. SuperAdmin'in hangi adımın (Postgres/Mongo/mail) nerede takıldığını ayrı ayrı görebilmesi ve retry'nin otomatik olması ihtiyacı netleşince outbox pattern'e geçildi. Tam mekanizma: [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox).
+:::
+
+`POST /admin/tenants` arka planda 3 farklı sisteme dokunuyor: **Postgres** (tenant + admin user), **Mongo** (`audit_log`'a olay kaydı), **e-posta** (davet linki). Bunlar arasında atomic bir transaction yok, dolayısıyla her adımın durumu ayrı ayrı izlenip retry edilebiliyor:
 
 ```
-1. create_tenant_and_admin(...)   # Postgres, TEK transaction — kritik, atomic
-2. log_to_audit("tenant.created")  # Mongo — kritik değil, başarısız olursa retry kuyruğuna düşer
-3. send_invite_or_temp_password()  # e-posta — kritik değil, başarısız olursa "yeniden gönder" butonuyla telafi edilir
+1. create_tenant_and_admin(...)    # Postgres, TEK transaction — kritik, atomik
+2. INSERT tenant_outbox_events      # aynı transaction'da: seed_mongo_audit + send_invite_email (status=pending)
 ```
 
-Kural basit: **adım 1 başarısız olursa hiçbir şey olmamış sayılır** (transaction rollback). **Adım 2-3 başarısız olursa tenant yine de var olur** — bunlar retry edilebilir, tenant'ı geri almaya değmez. Ayrı bir Saga kütüphanesi/framework'e gerek yok; bu ayrım (hangi adım atomic, hangisi retry'lanabilir) tek bir Python fonksiyonunda try/except ile ifade edilir.
+**Adım 1 başarısız olursa hiçbir şey olmamış sayılır** (transaction rollback — outbox satırları da hiç yazılmaz, aynı transaction'ın parçası oldukları için). Adım 1 başarılı olduğu an tenant zaten var; geri kalan iki adım arka planda çalışan bir **poller worker** tarafından, exponential backoff ile otomatik retry edilir. Manuel "tekrar dene" butonuna artık sadece bir adım `MAX_ATTEMPTS`'e ulaşıp `failed` (dead-letter) olduğunda ihtiyaç var — **Provisioning Durumu** paneli bu durumu step-by-step gösterir (yukarıdaki panel sayfaları listesi, 5. madde).
+
+:::note Implementasyon durumu
+Outbox motoru (`core/outbox/`, `models/tenant_outbox_event.py`, migration) **kodlandı ve gerçek Postgres'e karşı test edildi**. `create_tenant_and_admin(...)` (adım 1) ve bu endpoint'in kendisi (`POST /admin/tenants`) henüz `routers/admin.py`'de yazılmadı — `models/user.py`/`models/invitation.py`'ı bekliyor.
+:::
 
 ## Kapsam dışı (şimdilik) — vizyon kaybolmasın diye not
 

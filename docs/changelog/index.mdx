@@ -1,0 +1,35 @@
+---
+title: Değişiklik Geçmişi
+sidebar_position: 1
+slug: /changelog
+description: Mimari kararların ve implementasyonun zaman sırasına göre kaydı — her satır ilgili sayfanın tam detayına gider.
+---
+
+# Değişiklik Geçmişi
+
+Bu sayfa, kararların ve kodun **zaman içinde nasıl evrildiğini** takip etmek için var — özellikle bir karar sonradan revize edildiğinde ("önce X'e karar verildi, sonra Y'ye çevrildi") eski durumu aramak zorunda kalmamak için. Her satır, o değişikliğin tam anlatıldığı sayfaya gider; burada sadece özet + etiket var.
+
+En yeni değişiklik en üstte.
+
+## Etiket anlamları
+
+<span className="badge badge--success">implementasyon</span> gerçek kod yazıldı/test edildi ·
+<span className="badge badge--secondary">mimari-karar</span> bir seçim yapıldı, gerekçesiyle kayıtlı ·
+<span className="badge badge--warning">docs-revizyonu</span> önceki bir kararın belgesi güncellendi/tersine çevrildi ·
+<span className="badge badge--info">test</span> otomatik test veya smoke test eklendi
+
+## 2026-08-14
+
+| Tarih | Değişiklik | Etiketler | Özet |
+|---|---|---|---|
+| 14 Ağu | [Outbox motoru kodlandı ve doğrulandı](/guides/tenant-provisioning-outbox#implementasyon-durumu) | <span className="badge badge--success">implementasyon</span> <span className="badge badge--info">test</span> | `core/db.py`, `core/outbox/*`, `models/tenant*.py`, `services/email_service.py`, `services/audit_service.py`, `core/lifespan.py`, `main.py` yazıldı; Alembic migration'ı gerçek `newportal` Postgres'ine uygulandı; unit testler (5/5) + gerçek DB'ye karşı smoke test (başarı + retry/dead-letter yolu) geçti. |
+| 14 Ağu | [Eski "Saga'ya gerek yok" kararı tersine çevrildi](/services/platform-admin#tenant-oluşturma-orkestrasyonu--outbox-pattern-ile-retryli) | <span className="badge badge--warning">docs-revizyonu</span> | `platform-admin/overview.mdx`, `use-cases/user-registration.mdx`, `services/auth-service/invite-delivery.mdx`, `guides/multi-tenancy.mdx` — hepsi outbox pattern'e göre güncellendi; mail gönderimi `BackgroundTasks` yerine outbox event'ine çevrildi. |
+| 14 Ağu | [Outbox Poller Worker tasarımı](/guides/tenant-provisioning-outbox#outbox-engine--dört-ayrı-sorumluluk) | <span className="badge badge--secondary">mimari-karar</span> | `FOR UPDATE SKIP LOCKED` ile satır claim, exponential backoff, `MAX_ATTEMPTS` sonrası dead-letter, at-least-once idempotency notu. |
+| 14 Ağu | [Outbox Pattern (`tenant_outbox_events`)](/guides/tenant-provisioning-outbox) | <span className="badge badge--secondary">mimari-karar</span> | Mail + Mongo audit adımlarının retry'li/izlenebilir yürütülmesi için outbox tablosu — DB-outbox+poller, Celery/Redis ve arq değerlendirilip reddedildi (erken aşamada gereksiz infra). |
+| 14 Ağu | [Session Factory Pattern](/guides/tenant-provisioning-outbox#session-factory--coredbpy) | <span className="badge badge--secondary">mimari-karar</span> | Tüm DB erişimi `get_tenant_session()` tek kapısından — izolasyon stratejisi ileride değişirse router/service kodu etkilenmeden sadece bu fonksiyon değişir. |
+| 14 Ağu | [Multi-tenancy: Shared-schema + tenant_id](/guides/multi-tenancy) | <span className="badge badge--secondary">mimari-karar</span> | Schema-per-tenant / db-per-tenant değerlendirildi, reddedildi — mevcut 35 tablolu şema zaten shared-schema+tenant_id, bunu haklı çıkaracak ihtiyaç (compliance, çok büyük müşteri) yok. |
+
+## İlgili
+
+- [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox) — tüm bu kararların toplandığı kanonik teknik sayfa, "Implementasyon Durumu" tablosuyla
+- [Multi-tenancy](/guides/multi-tenancy) — izolasyon modeli kararı

@@ -1,0 +1,9 @@
+{
+  "label": "Değişiklik Geçmişi",
+  "position": 0,
+  "link": {
+    "type": "generated-index",
+    "slug": "/changelog",
+    "description": "Mimari kararların ve implementasyonun zaman sırasına göre kaydı — hangi karar ne zaman değişti, hangi kod ne zaman yazıldı, detayına tek tıkla git."
+  }
+}

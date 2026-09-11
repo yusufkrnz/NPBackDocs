@@ -25,8 +25,10 @@ sequenceDiagram
     SA->>Auth: POST /admin/tenants (delivery=invite)
     Auth->>Auth: token = secrets.token_urlsafe(32)
     Auth->>DB: Invitations (token_hash, expires_at=+7gün, is_used=false)
+    Auth->>DB: tenant_outbox_events (event_type=send_invite_email, status=pending) — TEK transaction'da
     Auth-->>SA: 201 (panelde SADECE "e-posta gönderildi" mesajı — link YOK)
-    Auth-)SMTP: BackgroundTask — e-posta gönder (bloklamadan)
+    Note over Auth,SMTP: Poller worker ayrı çalışır — pending event'i backoff ile retry eder
+    Auth-)SMTP: poller -> send_invite_email(event)
     SMTP-->>Kisi: "Hesabınız hazır" e-postası, link içinde
 
     Kisi->>Kisi: e-postadaki linke tıklar
@@ -62,7 +64,17 @@ def create_invitation(user_id: str) -> str:
   />
 </CodeRail>
 
-## E-posta gönderimi — SMTP, `.env`'den, isteği bloklamadan
+## E-posta gönderimi — SMTP, `.env`'den, outbox ile retry'li
+
+:::info Karar değişikliği
+Bu bölüm daha önce `BackgroundTasks.add_task` ile fire-and-forget gönderim yapıyordu (istek bloklanmaz ama başarısızlıkta otomatik retry de yoktu, sadece manuel "yeniden gönder" butonu vardı). Artık gönderim bir **outbox event**'i — poller worker backoff ile otomatik retry ediyor. Tam mekanizma: [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox).
+:::
+
+`send_invite_email` fonksiyonunun kendisi (SMTP'ye ne gönderdiği) değişmedi — sadece **kim, ne zaman çağırdığı** değişti: artık router değil, outbox poller'ın handler'ı çağırıyor.
+
+:::note Implementasyon durumu
+`services/email_service.py` (`send_invite_email` + `send_invite_email_handler`) **kodlandı**, `core/outbox` motoruna kayıtlı ve smoke test'ten geçti — henüz canlı SMTP ile kasıtlı tetiklenmedi. `routers/admin.py` (aşağıdaki `POST /admin/tenants` örneği) henüz yazılmadı, `models/user.py`/`models/invitation.py`'ı bekliyor.
+:::
 
 <CodeRail>
   <CodeEditor
@@ -96,15 +108,34 @@ async def send_invite_email(to_email: str, raw_token: str) -> None:
   <CodeEditor
     filename="routers/admin.py"
     code={`@router.post("/admin/tenants")
-async def create_tenant(payload: CreateTenantRequest, background_tasks: BackgroundTasks, ...):
-    tenant, admin_user = await create_tenant_and_admin(payload)          # kritik, atomic (Postgres)
-    raw_token = create_invitation(admin_user.id)
+async def create_tenant(payload: CreateTenantRequest, db: AsyncSession = Depends(get_tenant_session)):
+    tenant, admin_user = await create_tenant_and_admin(db, payload)   # kritik, atomik (Postgres)
+    raw_token = create_invitation(db, admin_user.id)
 
-    # E-posta gönderimi ARKA PLANDA — isteği bloklamaz, kritik değil (retry'lanabilir)
-    background_tasks.add_task(send_invite_email, admin_user.email, raw_token)
+    # E-posta artık outbox event'i — AYNI transaction'da, atomik şekilde kaydedilir
+    db.add(TenantOutboxEvent(
+        tenant_id=tenant.id,
+        event_type="send_invite_email",
+        status="pending",
+        payload={"email": admin_user.email, "raw_token": raw_token},
+    ))
+    await db.commit()
 
     return {"tenant_id": tenant.id, "user_id": admin_user.id, "message_code": "admin.tenant.invite_sent"}
     # Dikkat: response'ta raw_token/link YOK — sadece e-postaya gidiyor`}
+  />
+</CodeRail>
+
+<CodeRail>
+  <CodeEditor
+    filename="core/outbox.py"
+    code={`async def send_invite_email_handler(event: TenantOutboxEvent) -> None:
+    await send_invite_email(
+        to_email=event.payload["email"],
+        raw_token=event.payload["raw_token"],
+    )
+    # başarısız olursa exception fırlar, poller attempt_count/backoff'u kendisi yönetir
+    # (bkz. Tenant Provisioning — Outbox Pattern → Retry / backoff / dead-letter)`}
   />
 </CodeRail>
 
@@ -139,3 +170,4 @@ Kullanıcı token ile e-posta sahipliğini zaten kanıtladı — şifre belirled
 - [Tenant Oluşturma](/use-cases/user-registration) — bu mekanizmayı tetikleyen ilk yer
 - [Ekip Daveti](/use-cases/team-invitation) — aynı `accept-invite`'ı kullanan ikinci yer
 - [Token Design](/services/auth-service/token-design) — access/refresh token'ların (bu sayfadaki davet token'ından farklı) nasıl üretildiği
+- [Tenant Provisioning — Outbox Pattern](/guides/tenant-provisioning-outbox) — `send_invite_email` event'inin poller/retry/backoff mekanizması

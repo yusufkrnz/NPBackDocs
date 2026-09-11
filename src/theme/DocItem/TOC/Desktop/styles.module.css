@@ -14,7 +14,19 @@
  * şekilde en üstte otursun, alttan kayan kod hiçbir zaman içinden geçip görünmesin.
  */
 :global(.theme-doc-toc-desktop) {
-  position: relative;
+  /* NOT: az önce burada `position: relative` vardı — vendor'ın kendi
+     `.tableOfContents` kuralındaki `position: sticky`'i eşit specificity'de
+     ama sonradan yüklenerek eziyordu. Sticky kırılınca TOC nav artık ekranda
+     sabit kalmıyordu; sağ kolon (TOC + CodeRail kartları, kısa metin + 9 kod
+     kartı yüzünden sol koldan çok daha uzun) sayfa kaydıkça sol kolonla aynı
+     hizada scroll olmuyor, ikisi birbirinden bağımsız yükseklikte kayıp görsel
+     olarak üst üste/karışık görünüyordu. z-index'in etkili olması için
+     "positioned" bir eleman yeterli — sticky zaten pozisyonludur, `relative`ye
+     hiç gerek yoktu. */
+  position: sticky;
   z-index: 1;
-  background: var(--ifm-background-color);
+  /* --ifm-background-color, light temada bilerek "transparent" (Infima'nın kendi
+     default.css'i, satır 134) — burada işe yaramıyordu. Her iki temada da opak
+     olan yüzey rengini kullanıyoruz. */
+  background: var(--ifm-background-surface-color);
 }
