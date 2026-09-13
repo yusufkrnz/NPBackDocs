@@ -1,11 +1,11 @@
 ---
-title: Dashboard Event Kataloğu ve Dinamik Tablo Kataloğu
+title: Dashboard Capability Fonksiyonları ve Dinamik Tablo Kataloğu
 sidebar_position: 15
-description: Kişiye özel HTML dashboard'larda buton/arama/filtre gibi etkileşimlerin DB'ye güvenli şekilde yazması — sabit step tipi kataloğu + tenant'a özel dinamik tablo şeması, SQL/keyfi kod olmadan, tamamen esnek kompozisyonla.
+description: Kişiye özel HTML dashboard'larda LLM'in ürettiği generative JS'in DB'ye güvenli şekilde yazması — kod hiç backend'de çalışmıyor, sadece 5 whitelist'li capability fonksiyonuna RPC çağrısı gidiyor.
 wide_toc: true
 ---
 
-# Dashboard Event Kataloğu ve Dinamik Tablo Kataloğu
+# Dashboard Capability Fonksiyonları ve Dinamik Tablo Kataloğu
 
 ## Bu sayfa neden var, ve [Dinamik Sorgu Ölçeklenmesi](/ai/dynamic-function-scaling)'nden farkı ne
 
@@ -30,9 +30,9 @@ flowchart TB
         V1 --> V2 --> V3
     end
     subgraph D["🗄️ DAVRANIŞ — DB'ye/mail'e dokunuyor, sandbox onu kurtaramaz"]
-        D1["LLM bir etkileşim tanımlar"]
-        D2["Sabit step tipi + whitelist'li parametre"]
-        D3["✅ Sınırsız KOMBİNASYON, sabit ve güvenli PRIMITIVE'ler"]
+        D1["LLM serbest JS mantığı yazar"]
+        D2["Backend'e kod değil, whitelist'li {fn, args} RPC'si gider"]
+        D3["✅ Mantık SINIRSIZ, dokunabildiği 5 kapı SABİT"]
         D1 --> D2 --> D3
     end
 ```
@@ -64,97 +64,112 @@ Kullanıcının "özel tablosu" runtime'da LLM tarafından tanımlanıyor (`"ür
 }
 ```
 
-`columns` listesi aynı zamanda **whitelist kaynağı** — her step çağrısında `field`/`patch` anahtarları buna karşı doğrulanır.
+`columns` listesi aynı zamanda **whitelist kaynağı** — her capability çağrısında `field`/`patch` anahtarları buna karşı doğrulanır.
 
-## Katalog 2 — Step Pipeline (sabit ~8-10 step tipi, sınırsız dizilim)
+## Katalog 2 — Capability Fonksiyonları (generative JS + RPC whitelist)
 
-Bir buton/arama kutusu tek bir DB işlemi değil, **sıralı bir adım listesi** tetikler — "onayla" butonu hem satır güncelleyebilir, hem mail atabilir, hem audit log yazabilir. Kişiye özel olan hiçbir zaman yeni kod değil, hep **mevcut step tiplerinin dizilimi**:
+**Önceki tasarımın düzeltmesi:** "sabit step type listesi" (JSON pipeline) yerine, davranış tarafı da **görünüm kadar generative** — LLM her interaktif eleman için gerçek JS mantığı (döngü, koşul, sıralama) yazıyor, aynı HTML'i ürettiği gibi. Kısıtlama step tipinde değil, o JS'in **dokunabildiği yerde**.
 
-| Step type | Ne yapar | Whitelist kaynağı |
-|---|---|---|
-| `list_rows` / `search_rows` | okuma, filtre, arama | `dashboard_tables.columns` |
-| `create_row` / `update_row` / `delete_row` | yazma (soft-delete, `previous` saklanır) | `dashboard_tables.columns` |
-| `send_email` | mail tetikleme | sabit şablon listesi — mevcut `tenant_outbox_events` altyapısına yazılır, senkron gönderilmez |
-| `condition` | "eğer stok 10'un altındaysa devam et" | sabit operatör eşlemesi |
-| `compute` | SUM/AVG/IF/COMPARE ile hesaplama | sabit primitive seti |
+**Kritik nokta: bu kod hiçbir zaman backend'de çalışmıyor.** LLM'in yazdığı JS zaten iframe'de (`sandbox="allow-scripts"`, ağ kapalı) çalışıyor — browser'ın kendisi sandbox. Backend'e kod hiç gitmiyor, sadece tek tek **fonksiyon çağrısı verisi** gidiyor.
 
-```python showLineNumbers
-class Step(BaseModel):
-    type: Literal["list_rows","search_rows","create_row","update_row",
-                   "delete_row","send_email","condition","compute"]
-    params: dict  # type'a göre HANDLER'ın kendi şemasıyla validate edilir
-
-class DashboardEvent(BaseModel):
-    event_id: str
-    trigger: dict          # {"type": "button_click", "element_id": "btn-onayla"}
-    steps: list[Step]      # kişiye özel olan TEK yer: sıra + parametreler
-    stop_on_failure: bool = True
-
-# Her step type kendi whitelist'li şemasını taşıyan bir handler'a bağlanır
-STEP_TYPES: dict[str, "StepHandler"] = {
-    "update_row": UpdateRowHandler(),   # params_schema: table_id, patch — columns'a karşı doğrular
-    "send_email": SendEmailHandler(),   # params_schema: to_field, template (sabit listeden)
-    "condition":  ConditionHandler(),   # params_schema: field, op, value
-    # ...
+```js
+// LLM'in ürettiği JS — iframe İÇİNDE çalışır, mantık tamamen serbest
+async function onClickKapat(rowId) {
+  await dbUpdate("firsatlar", rowId, {asama: "kazanildi"});
+  await sendMail({to_field: "musteri_email", template: "firsat_kazanildi"});
+  await dbCreate("audit_log", {aksiyon: "firsat_kapandi"});
 }
-
-async def run_event(event: DashboardEvent, tenant_id: UUID, idempotency_key: str) -> None:
-    if await already_executed(idempotency_key):     # çift tıklama koruması
-        return
-    for step in event.steps:
-        handler = STEP_TYPES[step.type]                          # bilinmeyen type -> zaten kayıt sırasında reddedildi
-        parsed = handler.params_schema.model_validate(step.params) # whitelist burada uygulanıyor
-        result = await handler.run(tenant_id, parsed)
-        if not result.ok and event.stop_on_failure:
-            break                                                  # tamamlanan step'ler GERİ ALINMAZ
-    await mark_executed(idempotency_key)
 ```
 
-LLM hiçbir zaman bu fonksiyonların içine kod yazmıyor — sadece `steps` listesini, sabit `type` alfabesinden seçerek dolduruyor.
+`dbUpdate`, `dbCreate`, `dbDelete`, `dbQuery`, `sendMail` — bunlar gerçek DB bağlantısı DEĞİL, biz iframe'e enjekte ettiğimiz (bootstrap script) ince sarmalayıcılar. Her biri sadece `postMessage` ile **veri** yolluyor, backend'den cevabı bekliyor:
+
+```js
+// Bootstrap script — LLM bunu yazmıyor, biz her HTML'e otomatik enjekte ediyoruz
+function dbUpdate(table, rowId, patch) {
+  return new Promise((resolve) => {
+    const callId = crypto.randomUUID();
+    postMessage({callId, fn: "db_update", args: [table, rowId, patch]}, "*");
+    pendingCalls[callId] = resolve;   // backend cevabı postMessage ile dönünce resolve edilir
+  });
+}
+```
+
+### Backend tarafı — sadece 5 whitelist'li fonksiyon, kod hiç yok
+
+```python showLineNumbers
+CAPABILITIES: dict[str, "CapabilityHandler"] = {
+    "db_update": UpdateRowHandler(),   # args: table_id, row_id, patch — columns'a karşı doğrular
+    "db_create": CreateRowHandler(),   # args: table_id, row_data
+    "db_delete": DeleteRowHandler(),   # args: table_id, row_id (soft-delete)
+    "db_query":  QueryRowsHandler(),   # args: table_id, filters
+    "send_mail": SendMailHandler(),    # args: to_field, template — outbox'a yazar, senkron göndermez
+}
+
+class CapabilityCall(BaseModel):
+    call_id: str
+    fn: Literal["db_update","db_create","db_delete","db_query","send_mail"]
+    args: list
+
+async def handle_call(call: CapabilityCall, tenant_id: UUID, idempotency_key: str) -> dict:
+    if await already_executed(idempotency_key):     # çift tıklama / retry koruması
+        return await get_cached_result(idempotency_key)
+    handler = CAPABILITIES[call.fn]                              # bilinmeyen fn -> zaten şema reddeder
+    parsed = handler.args_schema.model_validate(call.args)        # table_id/field'lar dashboard_tables.columns'a karşı whitelist
+    result = await handler.run(tenant_id, parsed)
+    await cache_result(idempotency_key, result)
+    return result
+```
+
+Backend hiçbir zaman "LLM'in kodunu çalıştırmıyor" — sadece gelen `{fn, args}` verisini 5 sabit fonksiyondan birine eşleyip **kendi Python kodunu** çalıştırıyor. LLM'in yazdığı JS ne kadar karmaşık olursa olsun (döngü, çok adımlı koşul), backend'e ulaşan şey hep aynı basit, whitelist'lenebilir şekil.
 
 ### Akış
 
 ```mermaid
-flowchart LR
-    A["🖱️ iframe: buton/arama"] -->|postMessage| B["Parent"]
-    B -->|"POST /dashboards/{id}/events"| C["Backend"]
-    C --> D{"idempotency_key\ndaha önce çalıştı mı?"}
-    D -- evet --> R["önceki sonucu dön"]
-    D -- hayır --> E["steps[] sırayla çalışır"]
-    E --> F{"her step: param\nwhitelist'ten geçti mi?"}
-    F -- hayır --> Y["❌ o step reddedilir"]
-    F -- evet --> G[("Mongo / Outbox")]
-    G --> H["event_result"]
+sequenceDiagram
+    participant JS as LLM'in JS'i (iframe içinde, generative)
+    participant P as Parent
+    participant BE as Backend
+    participant CAP as CAPABILITIES
+
+    JS->>JS: onClick tetiklenir, kendi mantığını çalıştırır (döngü/koşul serbest)
+    JS->>P: postMessage({fn:"db_update", args:[...]})
+    P->>BE: POST /dashboards/{id}/calls
+    BE->>BE: idempotency_key kontrolü
+    BE->>CAP: CAPABILITIES[fn]
+    CAP->>CAP: args, dashboard_tables.columns'a karşı whitelist
+    CAP->>CAP: gerçek Mongo yazması / outbox event'i
+    CAP-->>BE: sonuç
+    BE-->>P: sonuç
+    P->>JS: postMessage(sonuç) → Promise resolve olur
+    JS->>JS: bir sonraki satıra devam eder (ör. sendMail çağrısı)
 ```
+
+Bu tasarım, **her interaktif eleman için ayrı bir tetikleyici tanımına gerek bırakmıyor** — LLM tek bir `onClick` fonksiyonu içine istediği kadar `dbUpdate`/`sendMail` çağrısını istediği sırayla, istediği koşulla yazabiliyor. Kişiye özel olan artık ne "hangi step" ne de "hangi sıra" — doğrudan **JS'in kendisi**, tıpkı HTML gibi.
 
 ## İdempotency ve kısmi başarısızlık
 
-Pipeline çok adımlıysa "onayla'ya 2 kere basıldı" ya da "1. adım geçti, 2. adım patladı" gerçek bir risk:
+Her `dbUpdate`/`sendMail` çağrısı ayrı bir RPC olduğu için ("onayla'ya 2 kere basıldı" ya da "1. çağrı geçti, 2. çağrı patladı"):
 
-- **Çift çalıştırma** → her tetiklemenin bir `idempotency_key`'i var; aynı key ikinci kez gelirse pipeline hiç çalışmaz, kayıtlı sonuç dönülür.
-- **Senkron adımlar idempotent tasarlanır** → `status="onaylandi"` set etmek kaç kere çalışırsa çalışsın aynı sonucu verir.
-- **Harici adımlar (mail) outbox'a yazılır** → senkron gönderilmez, mevcut `tenant_outbox_events`/`OutboxPoller`'ın at-least-once + retry mekanizması aynen kullanılır, yeni altyapı gerekmez.
-- **Rollback YOK — bilinçli bir sınır** → `stop_on_failure` sadece kalan step'leri durdurur, tamamlanmış step'ler geri alınmaz. Compensating transaction (telafi işlemi) ayrı, ileri seviye bir konu — bugün kapsam dışı.
+- **Çift çağrı** → her `postMessage` çağrısının kendi `call_id`'si var; backend aynı `call_id`'yi ikinci kez görürse çalıştırmaz, önceki sonucu döner.
+- **`db_update` idempotent tasarlanır** → `asama="kazanildi"` set etmek kaç kere çalışırsa çalışsın aynı sonucu verir.
+- **`send_mail` outbox'a yazılır** → senkron gönderilmez, mevcut `tenant_outbox_events`/`OutboxPoller`'ın at-least-once + retry mekanizması aynen kullanılır.
+- **Rollback YOK — bilinçli bir sınır** → JS'in kendi akışı bir çağrıdan sonra durursa (ör. ağ hatası), önceki çağrılar geri alınmaz. Compensating transaction ayrı, ileri seviye bir konu — bugün kapsam dışı.
 
 ## Geri alınabilirlik (undo)
 
-`update_row`/`delete_row` step'leri veriyi kalıcı silmiyor: `delete_row` → `is_deleted: true`; `update_row` → eski hâl `previous`'a kopyalanır. Tek seviye undo (event-sourcing değil) — MVP için yeterli.
-
-## Gelecek notu: capability sandboxing (bugün değil)
-
-Step tipi seti bile yetmeyen, gerçekten öngörülemeyen bir mantık gerekirse (döngü, çok adımlı koşullu iş kuralı), bir sonraki adım LLM'e **sandboxlanmış kod** yazdırmak olabilir — V8 isolate/WASM gibi izole bir yorumlayıcıda, dışarıya sadece `db_update`/`send_mail` gibi birkaç fonksiyonun enjekte edildiği bir "dünya" içinde. Bu, **mantığı** sınırsızlaştırır ama **dokunabildiği gerçek işlemleri** yine sabit tutar. Ciddi bir izolasyon altyapısı (timeout, memory limit, prototype pollution koruması) gerektirdiği için bugünün production modeli değil — talep gerçekten birikirse değerlendirilecek bir not.
+`db_update`/`db_delete` veriyi kalıcı silmiyor: `db_delete` → `is_deleted: true`; `db_update` → eski hâl `previous`'a kopyalanır. Tek seviye undo (event-sourcing değil) — MVP için yeterli.
 
 ## Kapsam dışı / açık noktalar
 
 - **Rol bazlı kolon maskeleme** — [EDGE-CASE-032](/ai/dynamic-function-scaling#edge-case-032-kolon-bazlı-hassas-veri-maskeleme-yok) ile aynı boşluk.
-- **Step → yetki eşlemesi** — salt-okunur roller henüz ayrılmadı.
+- **Capability → yetki eşlemesi** — salt-okunur roller (`db_query` var, `db_update/create/delete` yok) henüz ayrılmadı.
 - **`dashboard_tables` şemasının kim/ne zaman oluşturduğu** — LLM'in ilk istekte şemayı nasıl önereceği tasarlanmadı.
-- **Kod tarafı** — `services/dashboard_event_service.py`, `POST /dashboards/{id}/events` — hiçbiri henüz yazılmadı, bu sayfa tasarım kararı.
+- **Kod tarafı** — bootstrap script'in `dbUpdate`/`sendMail` sarmalayıcıları, `POST /dashboards/{id}/calls` — hiçbiri henüz yazılmadı, bu sayfa tasarım kararı.
 
 ## Özet
 
-- Event = tetikleyici + sıralı **step listesi** (JSON, kod değil) — 8-10 sabit step type, sınırsız dizilim/parametre kombinasyonu.
-- Kişiye özel olan hep **step'lerin sırası ve parametreleri**, hiçbir zaman yeni kod.
-- SQL yok, keyfi kod yok — whitelist'lenmiş alan adı + sabit step tipleriyle kurulan Mongo/outbox çağrıları.
-- Çift çalıştırma `idempotency_key` ile, harici yan etkiler outbox ile, rollback yok (bilinçli sınır).
-- Sandboxlanmış serbest kod bir gelecek notu — bugünün production modeli değil.
+- Davranış tarafı da görünüm gibi **generative** — LLM gerçek JS mantığı yazıyor, sabit "step type" enum'u yok.
+- Bu JS **hiçbir zaman backend'de çalışmıyor** — browser'ın iframe sandbox'ında çalışıyor, zaten izole.
+- Backend'e giden şey kod değil, tek tek **`{fn, args}` RPC çağrısı** — 5 sabit capability (`db_update`, `db_create`, `db_delete`, `db_query`, `send_mail`), her biri whitelist'ten geçiyor.
+- Kişiye özel olan JS'in kendisi (mantık sınırsız); sabit olan JS'in dokunabildiği 5 kapı.
+- Çift çağrı `call_id`/idempotency ile, harici yan etkiler outbox ile, rollback yok (bilinçli sınır).
